@@ -194,10 +194,10 @@ public:
     bigint *&native_handle() {return d;}
 
     Bigint() : d(bi_new()) {if (d == NULL) throw out_of_memory();}
-    Bigint(bi_leaf n) : d(bi_new()) {if (bi_assignu(d, n) == NULL) throw out_of_memory();}
-    Bigint(bi_signed_leaf n) : d(bi_new()) {if (bi_assign(d, n) == NULL) throw out_of_memory();}
-    Bigint(bi_intmax n) : d(bi_new()) {if (bi_assignl(d, n) == NULL) throw out_of_memory();}
-    Bigint(bi_uintmax n) : d(bi_new()) {if (bi_assignlu(d, n) == NULL) throw out_of_memory();}
+    Bigint(bi_leaf n) : d(bi_new()) {if (d == NULL || bi_assignu(d, n) == NULL) throw out_of_memory();}
+    Bigint(bi_signed_leaf n) : d(bi_new()) {if (d == NULL || bi_assign(d, n) == NULL) throw out_of_memory();}
+    Bigint(bi_intmax n) : d(bi_new()) {if (d == NULL || bi_assignl(d, n) == NULL) throw out_of_memory();}
+    Bigint(bi_uintmax n) : d(bi_new()) {if (d == NULL || bi_assignlu(d, n) == NULL) throw out_of_memory();}
     Bigint(const Bigint &other) : d(bi_copy(other.d)) {if (d == NULL) throw out_of_memory();}
 #if __cplusplus >= 201103L
     Bigint(Bigint &&other) : d(other.d) {other.d = NULL;}
