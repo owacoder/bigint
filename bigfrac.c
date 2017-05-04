@@ -193,7 +193,7 @@ int bf_cmp_eq(const bigfrac *bf, const bigfrac *bf2)
     {
         bi_destroy(a);
         bi_destroy(b);
-        return -1;
+        return 2;
     }
 
     r = bi_cmp(a, b);
