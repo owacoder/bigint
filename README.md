@@ -36,9 +36,8 @@ Here is the same example program written with the C++ interface:
     {
         try {
             Bigint b = 2;
-            size_t i;
 
-            for (i = 0; i < 10; ++i)
+            for (size_t i = 0; i < 10; ++i)
             {
                 b.square();
                 std::cout << b.toString() << std::endl;
