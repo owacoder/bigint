@@ -206,7 +206,6 @@ public:
 
     Bigint &operator=(const Bigint &other)
     {
-        if (&other == this) return *this;
         if (bi_copy_to(d, other.d) == NULL) throw out_of_memory();
         return *this;
     }
