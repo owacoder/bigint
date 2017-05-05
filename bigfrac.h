@@ -54,6 +54,7 @@ bigfrac *bf_div_immediate_assign(bigfrac *bf, bi_signed_leaf val);
 bigfrac *bf_div_immediateu(const bigfrac *bf, bi_leaf val);
 bigfrac *bf_div_immediateu_assign(bigfrac *bf, bi_leaf val);
 bigfrac *bf_reduce(bigfrac *bf);
+int bf_sscan(const char *s, bigfrac *bf, size_t base);
 bigint_string bf_sprint(const bigfrac *bf, size_t base);
 void bf_print(const bigfrac *bf, size_t base);
 void bf_fprint(FILE *out, const bigfrac *bf, size_t base);
@@ -62,6 +63,12 @@ void bf_destroy(bigfrac *bf);
 
 #ifdef __cplusplus
 } // extern "C"
+
+class Bigfrac
+{
+
+};
+
 #endif
 
 #endif // BIGFRAC_H

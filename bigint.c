@@ -3206,38 +3206,124 @@ void bi_print(const bigint *bi, size_t base)
     bi_fprint(stdout, bi, base);
 }
 
-/* scans bi from stream f, with specified base */
+/* scans bi from string str, with specified base */
 /* returns -1 and destroys bi if out of memory */
 /* returns number of digits scanned otherwise */
 int bi_sscan(const char *str, bigint *bi, size_t base)
 {
     const char alphabet[] = "0123456789abcdefghijklmnopqrstuvwxyz";
     const char *p;
-    int c, hasdigits = 0, neg = 0;
+    int c = ' ', hasdigits = 0, neg = 0;
 
-    do
+    if (base <= 36)
     {
-        c = *str++;
-    } while (isspace(c));
-    if (!c) return hasdigits;
+        while (isspace(c))
+            c = *str++;
+        if (!c) return hasdigits;
 
-    bi_clear(bi);
-    if ((c == '-' || c == '+') && base <= 36)
+        bi_clear(bi);
+        if (c == '-' || c == '+')
+        {
+            neg = c == '-';
+            c = *str++;
+        }
+
+        if (base < 2) return 0;
+    }
+    else
     {
-        neg = c == '-';
+        bi_clear(bi);
         c = *str++;
     }
 
-    if (base < 2) return 0;
-
     while (1)
     {
-        if (!c) return hasdigits;
+        if (!c) break;
+
         if (base > 36 || (p = strchr(alphabet, tolower(c))) != NULL)
         {
             ++hasdigits;
             if (bi_mul_immediate_assign(bi, base) == NULL) return -1;
-            if (bi_add_immediate_assign(bi, base > 36? (int) (c % base): p-alphabet) == NULL) return -1;
+            if (base > 36)
+            {
+                if (bi_add_immediate_assign(bi, (int) (c % base)) == NULL)
+                    return -1;
+            }
+            else
+            {
+                c = p-alphabet;
+                if ((size_t) c > base)
+                    break;
+                if (bi_add_immediate_assign(bi, c) == NULL)
+                    return -1;
+            }
+        }
+        else
+            break;
+        c = *str++;
+    }
+
+    bi->sign = neg && !bi_is_zero(bi);
+
+    return hasdigits;
+}
+
+/* scans bi from string str, with specified base and string length */
+/* returns -1 and destroys bi if out of memory */
+/* returns number of digits scanned otherwise */
+int bi_sscan_n(const char *str, size_t len, bigint *bi, size_t base)
+{
+    const char alphabet[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+    const char *p;
+    int c = ' ', hasdigits = 0, neg = 0;
+
+    if (len == 0) return 0;
+
+    if (base <= 36)
+    {
+        while (isspace(c) && len > 0)
+        {
+            c = *str++;
+            --len;
+        }
+        ++len;
+        if (!c) return hasdigits;
+
+        bi_clear(bi);
+        if (len > 0 && (c == '-' || c == '+'))
+        {
+            neg = c == '-';
+            c = *str++;
+            --len;
+        }
+
+        if (base < 2 || len == 0) return 0;
+    }
+    else
+    {
+        bi_clear(bi);
+        c = *str++;
+    }
+
+    while (len-- > 0)
+    {
+        if (base > 36 || (p = strchr(alphabet, tolower(c))) != NULL)
+        {
+            ++hasdigits;
+            if (bi_mul_immediate_assign(bi, base) == NULL) return -1;
+            if (base > 36)
+            {
+                if (bi_add_immediate_assign(bi, (int) (c % base)) == NULL)
+                    return -1;
+            }
+            else
+            {
+                c = p-alphabet;
+                if ((size_t) c > base)
+                    break;
+                if (bi_add_immediate_assign(bi, c) == NULL)
+                    return -1;
+            }
         }
         else
             break;
@@ -3255,31 +3341,46 @@ int bi_fscan(FILE *f, bigint *bi, size_t base)
 {
     const char alphabet[] = "0123456789abcdefghijklmnopqrstuvwxyz";
     const char *p;
-    int c, hasdigits = 0, neg = 0;
+    int c = ' ', hasdigits = 0, neg = 0;
 
-    do
+    if (base <= 36)
     {
-        c = fgetc(f);
-    } while (isspace(c));
-    if (c == EOF) return hasdigits;
+        while (isspace(c))
+            c = fgetc(f);
+        if (c == EOF) return hasdigits;
 
-    bi_clear(bi);
-    if ((c == '-' || c == '+') && base <= 36)
-    {
-        neg = c == '-';
-        c = fgetc(f);
+        bi_clear(bi);
+        if (c == '-' || c == '+')
+        {
+            neg = c == '-';
+            c = fgetc(f);
+        }
+
+        if (base < 2) return 0;
     }
-
-    if (base < 2) return 0;
+    else
+        bi_clear(bi);
 
     while (1)
     {
-        if (c == EOF) return hasdigits;
+        if (c == EOF) break;
         if (base > 36 || (p = strchr(alphabet, tolower(c))) != NULL)
         {
             hasdigits = 1;
             if (bi_mul_immediate_assign(bi, base) == NULL) return -1;
-            if (bi_add_immediate_assign(bi, base > 36? (int) (c % base): p-alphabet) == NULL) return -1;
+            if (base > 36)
+            {
+                if (bi_add_immediate_assign(bi, (int) (c % base)) == NULL)
+                    return -1;
+            }
+            else
+            {
+                c = p-alphabet;
+                if ((size_t) c > base)
+                    break;
+                if (bi_add_immediate_assign(bi, c) == NULL)
+                    return -1;
+            }
         }
         else
         {

@@ -219,6 +219,7 @@ bigint *bi_mod_immediate_assign(bigint *bi, bi_signed_leaf denom);
 bigint *bi_gcd(const bigint *bi, const bigint *bi2);
 void bi_swap(bigint *bi_a, bigint *bi_b);
 int bi_sscan(const char *str, bigint *bi, size_t base);
+int bi_sscan_n(const char *str, size_t len, bigint *bi, size_t base);
 int bi_fscan(FILE *f, bigint *bi, size_t base);
 int bi_scan(bigint *bi, size_t base);
 bigint_string bi_sprint(const bigint *bi, size_t base);
@@ -230,6 +231,7 @@ void bi_destroy(bigint *bi);
 } // extern "C"
 
 #include <string>
+#include <iostream>
 
 class Bigint
 {
@@ -247,6 +249,8 @@ public:
 
     Bigint() : d(bi_new()) {if (d == NULL) throw out_of_memory();}
     Bigint(bi_intmax n) : d(bi_new()) {if (d == NULL || bi_assignl(d, n) == NULL) throw out_of_memory();}
+    Bigint(const char *s) : d(bi_new()) {if (d == NULL || bi_sscan(s, d, 10) < 0) throw out_of_memory();}
+    Bigint(const std::string &s) : d(bi_new()) {if (d == NULL || bi_sscan_n(s.c_str(), s.size(), d, 10) < 0) throw out_of_memory();}
     Bigint(const Bigint &other) : d(bi_copy(other.d)) {if (d == NULL) throw out_of_memory();}
 #if __cplusplus >= 201103L
     Bigint(Bigint &&other) : d(other.d) {other.d = NULL;}
@@ -436,6 +440,22 @@ public:
     }
     Bigint gcd(const Bigint &other) const {return Bigint(*this).gcdAssign(other);}
 
+    static Bigint fromString(const char *s, size_t base = 10)
+    {
+        bigint *b = bi_new();
+        if (b == NULL ||
+            bi_sscan(s, b, base) < 0) throw out_of_memory();
+        return Bigint(b);
+    }
+
+    static Bigint fromString(const std::string &s, size_t base = 10)
+    {
+        bigint *b = bi_new();
+        if (b == NULL ||
+            bi_sscan_n(s.c_str(), s.size(), b, base) < 0) throw out_of_memory();
+        return Bigint(b);
+    }
+
     std::string toString(size_t base = 10) const
     {
         bigint_string bstr = bi_sprint(d, base);
@@ -444,6 +464,51 @@ public:
         std::string str(bstr.string, bstr.len);
         bis_destroy(bstr);
         return str;
+    }
+
+    friend std::istream &operator>>(std::istream &in, Bigint &bi)
+    {
+        std::ios_base::fmtflags flags = in.flags();
+        std::string s;
+        in >> s;
+
+        switch (flags & std::ios_base::basefield)
+        {
+            case std::ios_base::hex:
+                if (s.size() >= 2 && s[0] == '0' && tolower(s[1]) == 'x')
+                    s.erase(0, 2);
+                bi = fromString(s, 16);
+                return in;
+            case std::ios_base::oct:
+                bi = fromString(s, 8);
+                return in;
+            case std::ios_base::dec:
+            default:
+                bi = fromString(s, 10);
+                return in;
+        }
+    }
+
+    friend std::ostream &operator<<(std::ostream &out, const Bigint &bi)
+    {
+        std::ios_base::fmtflags flags = out.flags();
+
+        switch (flags & std::ios_base::basefield)
+        {
+            case std::ios_base::hex:
+                return out << "0x" << bi.toString(16);
+            case std::ios_base::oct:
+            {
+                std::string str = bi.toString(8);
+                if (str == "0")
+                    return out << str;
+                else
+                    return out << '0' << str;
+            }
+            case std::ios_base::dec:
+            default:
+                return out << bi.toString(10);
+        }
     }
 };
 

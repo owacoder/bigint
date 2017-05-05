@@ -473,6 +473,35 @@ cleanup:
     return NULL;
 }
 
+int bf_sscan(const char *s, bigfrac *bf, size_t base)
+{
+    int n = bi_sscan(s, bf->n, base), n2 = 0;
+
+    if (n < 0)
+    {
+        bf->n = NULL;
+        bf_destroy(bf);
+        return n;
+    }
+
+    if (s[n] == '/')
+    {
+        s += n + 1;
+        n2 = bi_sscan(s, bf->d, base);
+        if (n2 < 0)
+        {
+            bf->d = NULL;
+            bf_destroy(bf);
+            return n2;
+        }
+        ++n2; // add length of '/' character
+    }
+    else
+        bi_assign(bf->d, 1);
+
+    return n + n2;
+}
+
 bigint_string bf_sprint(const bigfrac *bf, size_t base)
 {
     bigint_string numer, denom;
