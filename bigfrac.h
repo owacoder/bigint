@@ -8,6 +8,10 @@ typedef struct
     bigint *n, *d;
 } bigfrac;
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 bigfrac *bf_new();
 bigfrac *bf_new_frac(const bigint *numer, const bigint *denom);
 bigfrac *bf_new_frac_init(bigint *numer, bigint *denom);
@@ -55,6 +59,10 @@ void bf_print(const bigfrac *bf, size_t base);
 void bf_fprint(FILE *out, const bigfrac *bf, size_t base);
 void bf_swap(bigfrac *bfa, bigfrac *bfb);
 void bf_destroy(bigfrac *bf);
+
+#ifdef __cplusplus
+} // extern "C"
+#endif
 
 #endif // BIGFRAC_H
 

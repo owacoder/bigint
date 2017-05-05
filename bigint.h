@@ -7,7 +7,19 @@
 #include <stdio.h>
 #include <limits.h>
 
-#if 0// defined(__GNUC__)
+#ifndef BIGINT_WORD_SIZE
+#if SIZE_MAX == 0xffffffffffffffff // Assume it's a 64-bit platform
+#define BIGINT_WORD_SIZE 32
+#elif SIZE_MAX == 0xffffffff // Assume a 32-bit platform
+#define BIGINT_WORD_SIZE 16
+#elif SIZE_MAX == 0xffff // Assume a 16-bit platform
+#define BIGINT_WORD_SIZE 8
+#else
+#error BIGINT_WORD_SIZE must be specified. Cannot detect word size of target platform.
+#endif
+#endif
+
+#if BIGINT_WORD_SIZE == 64 && defined(__GNUC__)
 // Size of leaves, or digit cells. Must be unsigned.
 typedef uint64_t bi_leaf;
 // Size of signed leafs. Must be signed. An unsigned leaf must be able to store all the positive values.
@@ -19,7 +31,7 @@ typedef __uint128_t bi_uintmax;
 // Size of largest signed integer values
 typedef __int128_t bi_intmax;
 #define BIGINT_LEAFSIZE (8)
-#else
+#elif BIGINT_WORD_SIZE == 32
 // Size of leaves, or digit cells. Must be unsigned.
 typedef uint32_t bi_leaf;
 // Size of signed leafs. Must be signed. An unsigned leaf must be able to store all the positive values.
@@ -31,20 +43,60 @@ typedef uintmax_t bi_uintmax;
 // Size of signed maximum values
 typedef intmax_t bi_intmax;
 #define BIGINT_LEAFSIZE (4)
+#elif BIGINT_WORD_SIZE == 16
+// Size of leaves, or digit cells. Must be unsigned.
+typedef uint16_t bi_leaf;
+// Size of signed leafs. Must be signed. An unsigned leaf must be able to store all the positive values.
+typedef int16_t bi_signed_leaf;
+// Size of double-leaves, must fit the maximum leaf value squared. Must be unsigned.
+typedef uint32_t bi_dleaf;
+// Size of unsigned maximum values
+typedef uintmax_t bi_uintmax;
+// Size of signed maximum values
+typedef intmax_t bi_intmax;
+#define BIGINT_LEAFSIZE (2)
+#elif BIGINT_WORD_SIZE == 8
+// Size of leaves, or digit cells. Must be unsigned.
+typedef uint8_t bi_leaf;
+// Size of signed leafs. Must be signed. An unsigned leaf must be able to store all the positive values.
+typedef int8_t bi_signed_leaf;
+// Size of double-leaves, must fit the maximum leaf value squared. Must be unsigned.
+typedef uint16_t bi_dleaf;
+// Size of unsigned maximum values
+typedef uintmax_t bi_uintmax;
+// Size of signed maximum values
+typedef intmax_t bi_intmax;
+#define BIGINT_LEAFSIZE (1)
+#else
+#error BIGINT_WORD_SIZE must be defined to one of the following: 8, 16, or 32 (or 64 on GCC targets)
 #endif
+
 // Minimum number of leaves allocated for a bigint. Must be greater than 0.
+#ifndef BIGINT_MINLEAFS
 #define BIGINT_MINLEAFS (8)
+#endif
 
 #define BIGINT_LEAFMAX ((bi_leaf) ~0ULL)
 #define BIGINT_SIGNED_LEAFMAX ((bi_signed_leaf) (BIGINT_LEAFMAX >> 1))
 #define BIGINT_LEAFBYTES (BIGINT_LEAFSIZE*CHAR_BIT/8)
 #define BIGINT_LEAFBITS (BIGINT_LEAFSIZE*CHAR_BIT)
 #define BIGINT_LEAFS_PER_BI_INTMAX (sizeof(bi_intmax)/BIGINT_LEAFSIZE)
-#define BIGINT_KARATSUBA_MIN_LEAFS (640/BIGINT_LEAFBITS)
-#define BIGINT_TOOM_COOK_MIN_LEAFS (10000/BIGINT_LEAFBITS)
 
+#ifndef BIGINT_KARATSUBA_MIN_LEAFS
+#define BIGINT_KARATSUBA_MIN_LEAFS (640/BIGINT_LEAFBITS)
+#endif
+
+#ifndef BIGINT_TOOM_COOK_MIN_LEAFS
+#define BIGINT_TOOM_COOK_MIN_LEAFS (10000/BIGINT_LEAFBITS)
+#endif
+
+#if defined(__GNUC__) && !defined(BIGINT_DISABLE_PTHREADS)
 #define BIGINT_ENABLE_PTHREADS
+#endif
+
+#if !defined(BIGINT_DISABLE_LIBMATH)
 #define BIGINT_ENABLE_LIBMATH
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -194,10 +246,7 @@ public:
     bigint *&native_handle() {return d;}
 
     Bigint() : d(bi_new()) {if (d == NULL) throw out_of_memory();}
-    Bigint(bi_leaf n) : d(bi_new()) {if (d == NULL || bi_assignu(d, n) == NULL) throw out_of_memory();}
-    Bigint(bi_signed_leaf n) : d(bi_new()) {if (d == NULL || bi_assign(d, n) == NULL) throw out_of_memory();}
     Bigint(bi_intmax n) : d(bi_new()) {if (d == NULL || bi_assignl(d, n) == NULL) throw out_of_memory();}
-    Bigint(bi_uintmax n) : d(bi_new()) {if (d == NULL || bi_assignlu(d, n) == NULL) throw out_of_memory();}
     Bigint(const Bigint &other) : d(bi_copy(other.d)) {if (d == NULL) throw out_of_memory();}
 #if __cplusplus >= 201103L
     Bigint(Bigint &&other) : d(other.d) {other.d = NULL;}
@@ -210,27 +259,9 @@ public:
         return *this;
     }
 
-    Bigint &operator=(bi_leaf n)
-    {
-        if (bi_assignu(d, n) == NULL) throw out_of_memory();
-        return *this;
-    }
-
-    Bigint &operator=(bi_signed_leaf n)
-    {
-        if (bi_assign(d, n) == NULL) throw out_of_memory();
-        return *this;
-    }
-
     Bigint &operator=(bi_intmax n)
     {
         if (bi_assignl(d, n) == NULL) throw out_of_memory();
-        return *this;
-    }
-
-    Bigint &operator=(bi_uintmax n)
-    {
-        if (bi_assignlu(d, n) == NULL) throw out_of_memory();
         return *this;
     }
 
