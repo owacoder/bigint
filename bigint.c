@@ -396,13 +396,14 @@ int bi_log2(const bigint *bi)
     return (int) bi_bitcount(bi) - 1;
 }
 
-#ifdef BIGINT_ENABLE_LIBMATH
-// TODO: implement
-int bi_is_power_of_10(const bigint *bi)
+/* returns log2(bi), rounded down */
+/* returns -1 if bi is zero */
+long long bi_log2l(const bigint *bi)
 {
-    return 0;
+    return (long long) bi_bitcount(bi) - 1;
 }
 
+#ifdef BIGINT_ENABLE_LIBMATH
 // TODO: remove floating-point dependence?
 /* returns approximation of log10(bi), rounded down */
 /* returns -1 if bi is zero */
@@ -412,11 +413,26 @@ int bi_log10_approx(const bigint *bi)
     return bi_logn_approx(bi, 10);
 }
 
+/* returns approximation of log10(bi), rounded down */
+/* returns -1 if bi is zero */
+/* this function will be equal to log10(bi) or log10(bi)-1 */
+long long bi_log10l_approx(const bigint *bi)
+{
+    return bi_lognl_approx(bi, 10);
+}
+
 /* returns log10(bi), rounded down */
 /* returns -1 if bi is zero, -2 if out of memory */
 int bi_log10(const bigint *bi)
 {
     return bi_logn(bi, 10);
+}
+
+/* returns log10(bi), rounded down */
+/* returns -1 if bi is zero, -2 if out of memory */
+long long bi_log10l(const bigint *bi)
+{
+    return bi_lognl(bi, 10);
 }
 
 // TODO: remove floating-point dependence?
@@ -427,10 +443,27 @@ int bi_logn_approx(const bigint *bi, uintmax_t n)
 {
     int i = bi_log2(bi);
 
+    if (n == 2)
+        return i;
     if (i < 0 || n < 2)
         return -1;
     else
         return (int) (i / log2(n));
+}
+
+/* returns approximation of logn(bi), rounded down */
+/* returns -1 if bi is zero or n < 2 */
+/* this function will be equal to logn(bi) or logn(bi)-1 */
+long long bi_lognl_approx(const bigint *bi, uintmax_t n)
+{
+    long long i = bi_log2l(bi);
+
+    if (n == 2)
+        return i;
+    if (i < 0 || n < 2)
+        return -1;
+    else
+        return i / log2(n);
 }
 
 /* returns logn(bi), rounded down */
@@ -442,10 +475,33 @@ int bi_logn(const bigint *bi, uintmax_t n)
 
     if (n < 2)
         return -1;
+    else if (n == 2)
+        return approx;
 
     t = bi_new();
     if (bi_assign(t, n) == NULL ||
-        bi_exp_assign(t, approx+1) == NULL) return -2;
+        bi_uexp_assign(t, approx+1) == NULL) return -2;
+    approx += bi_cmp_mag(bi, t) >= 0;
+    bi_destroy(t);
+
+    return approx;
+}
+
+/* returns logn(bi), rounded down */
+/* returns -1 if bi is zero or n < 2, -2 if out of memory */
+long long bi_lognl(const bigint *bi, uintmax_t n)
+{
+    long long approx = bi_lognl_approx(bi, n);
+    bigint *t;
+
+    if (n < 2)
+        return -1;
+    else if (n == 2)
+        return approx;
+
+    t = bi_new();
+    if (bi_assign(t, n) == NULL ||
+        bi_uexp_assign(t, approx+1) == NULL) return -2;
     approx += bi_cmp_mag(bi, t) >= 0;
     bi_destroy(t);
 
@@ -2292,7 +2348,7 @@ bigint *bi_fact(bi_uintmax n)
     return result;
 }
 
-/* raises bi to the nth power and assigns the result to bi, returns bi */
+/* raises bi to the nth power and returns the result in a new bigint */
 /* returns NULL on out of memory condition */
 bigint *bi_uexp(const bigint *bi, bi_uintmax n)
 {
@@ -2301,7 +2357,7 @@ bigint *bi_uexp(const bigint *bi, bi_uintmax n)
     return bi_uexp_assign(result, n);
 }
 
-/* raises bi to the nth power and returns the result in a new bigint */
+/* raises bi to the nth power and assigns the result to bi, returns bi */
 /* returns NULL and destroys bi on out of memory condition */
 bigint *bi_uexp_assign(bigint *bi, bi_uintmax n)
 {
@@ -2345,6 +2401,51 @@ bigint *bi_exp_assign(bigint *bi, bi_intmax n)
 {
     if (n < 0) return bi_clear(bi);
     return bi_uexp_assign(bi, n);
+}
+
+/* raises bi to the nth power and assigns the result to bi, returns bi */
+/* returns NULL on out of memory condition */
+bigint *bi_uexp_mod(const bigint *bi, bi_uintmax n, const bigint *mod)
+{
+    bigint *result = bi_copy(bi);
+    if (result == NULL) return NULL;
+    return bi_uexp_mod_assign(result, n, mod);
+}
+
+/* raises bi to the nth power and returns the result in a new bigint */
+/* returns NULL and destroys bi on out of memory condition */
+bigint *bi_uexp_mod_assign(bigint *bi, bi_uintmax n, const bigint *mod)
+{
+    bigint *y;
+
+    if (n == 0 || bi_is_one(mod)) return bi_clear(bi);
+
+    if (n == 1) return bi_mod_assign(bi, mod);
+    else if (n == 2) return bi_square_assign(bi) == NULL? NULL: bi_mod_assign(bi, mod);
+    else if (bi_is_one(bi)) return bi;
+
+    y = bi_new();
+    if (y == NULL || bi_assign(y, 1) == NULL)
+    {
+        bi_destroy(y);
+        return NULL;
+    }
+
+    if (bi_mod_assign(bi, mod) == NULL) {bi_destroy(y); return NULL;}
+
+    while (n > 0)
+    {
+        if ((n & 1) &&
+            (bi_mul_assign(y, bi) == NULL ||
+             bi_mod_assign(y, mod) == NULL)) {bi_destroy(bi); return NULL;}
+        n >>= 1;
+        if (bi_square_assign(bi) == NULL ||
+            bi_mod_assign(bi, mod) == NULL) {bi_destroy(y); return NULL;}
+    }
+
+    bi_swap(bi, y);
+    bi_destroy(y);
+    return bi;
 }
 
 static bigint *bi_divmod_immediate_internal(bigint *dst, const bigint *bi, bi_signed_leaf denom, bigint **q, bi_signed_leaf *r);

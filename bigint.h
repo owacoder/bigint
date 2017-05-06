@@ -142,11 +142,15 @@ int bi_is_one(const bigint *bi);
 int bi_is_power_of_2(const bigint *bi);
 int bi_log2(const bigint *bi);
 #ifdef BIGINT_ENABLE_LIBMATH
-int bi_is_power_of_10(const bigint *bi);
+long long bi_log2l(const bigint *bi);
 int bi_log10_approx(const bigint *bi);
+long long bi_log10l_approx(const bigint *bi);
 int bi_log10(const bigint *bi);
+long long bi_log10l(const bigint *bi);
 int bi_logn_approx(const bigint *bi, uintmax_t n);
+long long bi_lognl_approx(const bigint *bi, uintmax_t n);
 int bi_logn(const bigint *bi, uintmax_t n);
+long long bi_lognl(const bigint *bi, uintmax_t n);
 #endif
 int bi_trailing_zeroes(const bigint *bi);
 bigint *bi_negate(const bigint *bi);
@@ -192,6 +196,8 @@ bigint *bi_uexp(const bigint *bi, bi_uintmax n);
 bigint *bi_uexp_assign(bigint *bi, bi_uintmax n);
 bigint *bi_exp(const bigint *bi, bi_intmax n);
 bigint *bi_exp_assign(bigint *bi, bi_intmax n);
+bigint *bi_uexp_mod(const bigint *bi, bi_uintmax n, const bigint *mod);
+bigint *bi_uexp_mod_assign(bigint *bi, bi_uintmax n, const bigint *mod);
 bigint *bi_divmod(const bigint *bi, const bigint *bi2, bigint **q, bigint **r);
 bigint *bi_divmod_assign(bigint *bi, const bigint *bi2, bigint **r);
 bigint *bi_div(const bigint *bi, const bigint *bi2);
@@ -259,13 +265,13 @@ public:
 
     Bigint &operator=(const Bigint &other)
     {
-        if (bi_copy_to(d, other.d) == NULL) throw out_of_memory();
+        if ((d = bi_copy_to(d, other.d)) == NULL) throw out_of_memory();
         return *this;
     }
 
     Bigint &operator=(bi_intmax n)
     {
-        if (bi_assignl(d, n) == NULL) throw out_of_memory();
+        if ((d = bi_assignl(d, n)) == NULL) throw out_of_memory();
         return *this;
     }
 
@@ -277,17 +283,68 @@ public:
     bool isPowerOf2() const {return bi_is_power_of_2(d);}
     // returns floor(log2(bigint)), -1 if input is zero
     int log2() const {return bi_log2(d);}
+    // returns floor(log2(bigint)), -1 if input is zero
+    long long log2l() const {return bi_log2l(d);}
 #ifdef BIGINT_ENABLE_LIBMATH
     // returns floor(log10(bigint)), -1 if input is zero
     int log10() const
     {
         int r = bi_log10(d);
-        return r < 0? -1: r;
+        if (r < -1) throw out_of_memory();
+        return r;
     }
+    // returns floor(log10(bigint)), -1 if input is zero
+    long long log10l() const
+    {
+        long long r = bi_log10l(d);
+        if (r < -1) throw out_of_memory();
+        return r;
+    }
+    // returns approximation of floor(log10(bigint)), -1 if input is zero
+    // equal to floor(log10(bigint)) or floor(log10(bigint))-1
+    int log10_approx() const
+    {
+        int r = bi_log10_approx(d);
+        if (r < -1) throw out_of_memory();
+        return r;
+    }
+    // returns approximation of floor(log10(bigint)), -1 if input is zero
+    // equal to floor(log10(bigint)) or floor(log10(bigint))-1
+    long long log10l_approx() const
+    {
+        long long r = bi_log10l_approx(d);
+        if (r < -1) throw out_of_memory();
+        return r;
+    }
+    // returns floor(logn(bigint)), -1 if input is zero
     int logn(uintmax_t n) const
     {
         int r = bi_logn(d, n);
-        return r < 0? -1: r;
+        if (r < -1) throw out_of_memory();
+        return r;
+    }
+    // returns floor(logn(bigint)), -1 if input is zero
+    long long lognl(uintmax_t n) const
+    {
+        long long r = bi_lognl(d, n);
+        if (r < -1) throw out_of_memory();
+        return r;
+    }
+    // returns approximation of floor(logn(bigint)), -1 if input is zero
+    // equal to floor(logn(bigint)) or floor(logn(bigint))-1
+    int logn_approx(uintmax_t n) const
+    {
+        int r = bi_logn_approx(d, n);
+        if (r < -1) throw out_of_memory();
+        return r;
+    }
+    // returns approximation of floor(logn(bigint)), -1 if input is zero
+    // equal to floor(logn(bigint)) or floor(logn(bigint))-1
+    long long lognl_approx(uintmax_t n) const
+    {
+        long long r = bi_lognl_approx(d, n);
+        if (r < -1) throw out_of_memory();
+        return r;
     }
 #endif
     // returns -1 if input is zero
@@ -309,31 +366,31 @@ public:
     Bigint operator++(int)
     {
         Bigint b(*this);
-        if (bi_add_immediate_assign(d, 1) == NULL) throw out_of_memory();
+        if ((d = bi_add_immediate_assign(d, 1)) == NULL) throw out_of_memory();
         return b;
     }
     Bigint operator--(int)
     {
         Bigint b(*this);
-        if (bi_sub_immediate_assign(d, 1) == NULL) throw out_of_memory();
+        if ((d = bi_sub_immediate_assign(d, 1)) == NULL) throw out_of_memory();
         return b;
     }
 
     // pre- operators
     Bigint &operator++()
     {
-        if (bi_add_immediate_assign(d, 1) == NULL) throw out_of_memory();
+        if ((d = bi_add_immediate_assign(d, 1)) == NULL) throw out_of_memory();
         return *this;
     }
     Bigint &operator--()
     {
-        if (bi_sub_immediate_assign(d, 1) == NULL) throw out_of_memory();
+        if ((d = bi_sub_immediate_assign(d, 1)) == NULL) throw out_of_memory();
         return *this;
     }
 
     Bigint &shiftLeft(size_t bits)
     {
-        if (bi_shl_assign(d, bits) == NULL) throw out_of_memory();
+        if ((d = bi_shl_assign(d, bits)) == NULL) throw out_of_memory();
         return *this;
     }
     Bigint shiftedLeft(size_t bits) const {return Bigint(*this).shiftLeft(bits);}
@@ -342,7 +399,7 @@ public:
 
     Bigint &shiftRight(size_t bits)
     {
-        if (bi_shr_assign(d, bits) == NULL) throw out_of_memory();
+        if ((d = bi_shr_assign(d, bits)) == NULL) throw out_of_memory();
         return *this;
     }
     Bigint shiftedRight(size_t bits) const {return Bigint(*this).shiftRight(bits);}
@@ -351,7 +408,7 @@ public:
 
     Bigint &add(const Bigint &other)
     {
-        if (bi_add_assign(d, other.d) == NULL) throw out_of_memory();
+        if ((d = bi_add_assign(d, other.d)) == NULL) throw out_of_memory();
         return *this;
     }
     Bigint added(const Bigint &other) const {return Bigint(*this).add(other);}
@@ -360,7 +417,7 @@ public:
 
     Bigint &subtract(const Bigint &other)
     {
-        if (bi_sub_assign(d, other.d) == NULL) throw out_of_memory();
+        if ((d = bi_sub_assign(d, other.d)) == NULL) throw out_of_memory();
         return *this;
     }
     Bigint subtracted(const Bigint &other) const {return Bigint(*this).subtract(other);}
@@ -369,7 +426,7 @@ public:
 
     Bigint &multiplyBy(const Bigint &other)
     {
-        if (bi_mul_assign(d, other.d) == NULL) throw out_of_memory();
+        if ((d = bi_mul_assign(d, other.d)) == NULL) throw out_of_memory();
         return *this;
     }
     Bigint multiplied(const Bigint &other) const {return Bigint(*this).multiplyBy(other);}
@@ -378,14 +435,14 @@ public:
 
     Bigint &square()
     {
-        if (bi_square_assign(d) == NULL) throw out_of_memory();
+        if ((d = bi_square_assign(d)) == NULL) throw out_of_memory();
         return *this;
     }
     Bigint squared() const {return Bigint(*this).square();}
 
     Bigint &squareRoot()
     {
-        if (bi_sqrt_assign(d) == NULL) throw out_of_memory();
+        if ((d = bi_sqrt_assign(d)) == NULL) throw out_of_memory();
         return *this;
     }
     Bigint squareRooted() const {return Bigint(*this).squareRoot();}
@@ -399,21 +456,27 @@ public:
 
     Bigint &power(bi_uintmax n)
     {
-        if (bi_uexp_assign(d, n) == NULL) throw out_of_memory();
+        if ((d = bi_uexp_assign(d, n)) == NULL) throw out_of_memory();
         return *this;
     }
     Bigint &power(bi_intmax n)
     {
-        if (bi_exp_assign(d, n) == NULL) throw out_of_memory();
+        if ((d = bi_exp_assign(d, n)) == NULL) throw out_of_memory();
         return *this;
     }
     Bigint powered(bi_uintmax n) const {return Bigint(*this).power(n);}
     Bigint powered(bi_intmax n) const {return Bigint(*this).power(n);}
+    Bigint &powerMod(bi_uintmax n, const Bigint &mod)
+    {
+        if ((d = bi_uexp_mod_assign(d, n, mod.d)) == NULL) throw out_of_memory();
+        return *this;
+    }
+    Bigint poweredMod(bi_uintmax n, const Bigint &mod) const {return Bigint(*this).powerMod(n, mod);}
 
     Bigint &divideBy(const Bigint &other)
     {
         if (bi_is_zero(other.d)) throw division_by_zero();
-        if (bi_div_assign(d, other.d) == NULL) throw out_of_memory();
+        if ((d = bi_div_assign(d, other.d)) == NULL) throw out_of_memory();
         return *this;
     }
     Bigint divided(const Bigint &other) const {return Bigint(*this).divideBy(other);}
@@ -423,7 +486,7 @@ public:
     Bigint &moduloBy(const Bigint &other)
     {
         if (bi_is_zero(other.d)) throw division_by_zero();
-        if (bi_mod_assign(d, other.d) == NULL) throw out_of_memory();
+        if ((d = bi_mod_assign(d, other.d)) == NULL) throw out_of_memory();
         return *this;
     }
     Bigint modulo(const Bigint &other) const {return Bigint(*this).moduloBy(other);}
