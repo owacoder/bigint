@@ -100,6 +100,16 @@ static size_t bi_bitcount(const bigint *bi)
     return 0;
 }
 
+/* returns bit at specified position, 0-indexed */
+/* returns -1 if specified bit is out of range */
+bi_signed_leaf bi_bit(const bigint *bi, size_t bit)
+{
+    size_t word = bit / BIGINT_LEAFBITS;
+    if (word >= bi->size)
+        return -1;
+    return (bi->data[word] >> (bit % BIGINT_LEAFBITS)) & 1;
+}
+
 /* returns number of leaves used in bi */
 size_t bi_used(const bigint *bi)
 {
@@ -2365,7 +2375,7 @@ bigint *bi_uexp_assign(bigint *bi, bi_uintmax n)
 
     if (n == 1) return bi;
     else if (n == 2) return bi_square_assign(bi);
-    else if (n == 0) return bi_clear(bi);
+    else if (n == 0) return bi_assignu(bi, 1);
     else if (bi_is_one(bi)) return bi;
 
     y = bi_new();
@@ -2403,7 +2413,7 @@ bigint *bi_exp_assign(bigint *bi, bi_intmax n)
     return bi_uexp_assign(bi, n);
 }
 
-/* raises bi to the nth power and assigns the result to bi, returns bi */
+/* raises bi to the nth power and returns the result (using modulo `mod`) in a new bigint */
 /* returns NULL on out of memory condition */
 bigint *bi_uexp_mod(const bigint *bi, bi_uintmax n, const bigint *mod)
 {
@@ -2412,16 +2422,17 @@ bigint *bi_uexp_mod(const bigint *bi, bi_uintmax n, const bigint *mod)
     return bi_uexp_mod_assign(result, n, mod);
 }
 
-/* raises bi to the nth power and returns the result in a new bigint */
+/* raises bi to the nth power and assigns the result (using modulo `mod`) to bi, returns bi */
 /* returns NULL and destroys bi on out of memory condition */
 bigint *bi_uexp_mod_assign(bigint *bi, bi_uintmax n, const bigint *mod)
 {
     bigint *y;
 
-    if (n == 0 || bi_is_one(mod)) return bi_clear(bi);
+    if (bi_is_one(mod)) return bi_clear(bi);
 
     if (n == 1) return bi_mod_assign(bi, mod);
     else if (n == 2) return bi_square_assign(bi) == NULL? NULL: bi_mod_assign(bi, mod);
+    else if (n == 0) return bi_assignu(bi, 1);
     else if (bi_is_one(bi)) return bi;
 
     y = bi_new();
@@ -2439,6 +2450,75 @@ bigint *bi_uexp_mod_assign(bigint *bi, bi_uintmax n, const bigint *mod)
             (bi_mul_assign(y, bi) == NULL ||
              bi_mod_assign(y, mod) == NULL)) {bi_destroy(bi); return NULL;}
         n >>= 1;
+        if (bi_square_assign(bi) == NULL ||
+            bi_mod_assign(bi, mod) == NULL) {bi_destroy(y); return NULL;}
+    }
+
+    bi_swap(bi, y);
+    bi_destroy(y);
+    return bi;
+}
+
+/* raises bi to the nth power and returns the result (using modulo `mod`) in a new bigint */
+/* returns NULL on out of memory condition */
+bigint *bi_exp_mod(const bigint *bi, bi_intmax n, const bigint *mod)
+{
+    bigint *result;
+    if (n < 0) return bi_new();
+    if ((result = bi_copy(bi)) == NULL) return NULL;
+    return bi_exp_mod_assign(result, n, mod);
+}
+
+/* raises bi to the nth power and assigns the result (using modulo `mod`) to bi, returns bi */
+/* returns NULL and destroys bi on out of memory condition */
+bigint *bi_exp_mod_assign(bigint *bi, bi_intmax n, const bigint *mod)
+{
+    bigint *result;
+    if (n < 0) return bi_clear(bi);
+    if ((result = bi_copy(bi)) == NULL) return NULL;
+    return bi_uexp_mod_assign(result, n, mod);
+}
+
+/* raises bi to the nth power and returns the result (using modulo `mod`) in a new bigint */
+/* returns NULL on out of memory condition */
+bigint *bi_large_exp_mod(const bigint *bi, const bigint *n, const bigint *mod)
+{
+    bigint *result = bi_copy(bi);
+    if (result == NULL) return NULL;
+    return bi_large_exp_mod_assign(result, n, mod);
+}
+
+// TODO: not yet implemented
+/* raises bi to the nth power and assigns the result (using modulo `mod`) to bi, returns bi */
+/* returns NULL and destroys bi on out of memory condition */
+bigint *bi_large_exp_mod_assign(bigint *bi, const bigint *n, const bigint *mod)
+{
+    bigint *y;
+    size_t bits, i;
+
+    if (bi_is_negative(n) || bi_is_one(mod)) return bi_clear(bi);
+
+    if (bi_is_one(n)) return bi_mod_assign(bi, mod);
+    else if (bi_cmp_immu(n, 2) == 0) return bi_square_assign(bi) == NULL? NULL: bi_mod_assign(bi, mod);
+    else if (bi_is_zero(n)) return bi_assignu(bi, 1);
+    else if (bi_is_one(bi)) return bi;
+
+    y = bi_new();
+    if (y == NULL || bi_assign(y, 1) == NULL)
+    {
+        bi_destroy(y);
+        return NULL;
+    }
+
+    if (bi_mod_assign(bi, mod) == NULL) {bi_destroy(y); return NULL;}
+
+    bits = bi_bitcount(n);
+    for (i = 0; i < bits; ++i)
+    {
+        if (bi_bit(n, i) &&
+            (bi_mul_assign(y, bi) == NULL ||
+             bi_mod_assign(y, mod) == NULL)) {bi_destroy(bi); return NULL;}
+
         if (bi_square_assign(bi) == NULL ||
             bi_mod_assign(bi, mod) == NULL) {bi_destroy(y); return NULL;}
     }

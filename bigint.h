@@ -125,6 +125,7 @@ bigint *bi_assignu(bigint *bi, bi_leaf value);
 bigint *bi_assign(bigint *bi, bi_signed_leaf value);
 bigint *bi_assignl(bigint *bi, bi_intmax value);
 bigint *bi_assignlu(bigint *bi, bi_uintmax value);
+bi_signed_leaf bi_bit(const bigint *bi, size_t bit);
 size_t bi_used(const bigint *bi);
 bi_leaf bi_to_intu(const bigint *bi);
 bi_signed_leaf bi_to_int(const bigint *bi);
@@ -198,6 +199,10 @@ bigint *bi_exp(const bigint *bi, bi_intmax n);
 bigint *bi_exp_assign(bigint *bi, bi_intmax n);
 bigint *bi_uexp_mod(const bigint *bi, bi_uintmax n, const bigint *mod);
 bigint *bi_uexp_mod_assign(bigint *bi, bi_uintmax n, const bigint *mod);
+bigint *bi_exp_mod(const bigint *bi, bi_intmax n, const bigint *mod);
+bigint *bi_exp_mod_assign(bigint *bi, bi_intmax n, const bigint *mod);
+bigint *bi_large_exp_mod(const bigint *bi, const bigint *n, const bigint *mod);
+bigint *bi_large_exp_mod_assign(bigint *bi, const bigint *n, const bigint *mod);
 bigint *bi_divmod(const bigint *bi, const bigint *bi2, bigint **q, bigint **r);
 bigint *bi_divmod_assign(bigint *bi, const bigint *bi2, bigint **r);
 bigint *bi_div(const bigint *bi, const bigint *bi2);
@@ -466,12 +471,24 @@ public:
     }
     Bigint powered(bi_uintmax n) const {return Bigint(*this).power(n);}
     Bigint powered(bi_intmax n) const {return Bigint(*this).power(n);}
-    Bigint &powerMod(bi_uintmax n, const Bigint &mod)
+    Bigint &powerModU(bi_uintmax n, const Bigint &mod)
     {
         if ((d = bi_uexp_mod_assign(d, n, mod.d)) == NULL) throw out_of_memory();
         return *this;
     }
-    Bigint poweredMod(bi_uintmax n, const Bigint &mod) const {return Bigint(*this).powerMod(n, mod);}
+    Bigint &powerMod(bi_intmax n, const Bigint &mod)
+    {
+        if ((d = bi_exp_mod_assign(d, n, mod.d)) == NULL) throw out_of_memory();
+        return *this;
+    }
+    Bigint &powerMod(const Bigint &n, const Bigint &mod)
+    {
+        if ((d = bi_large_exp_mod_assign(d, n.d, mod.d)) == NULL) throw out_of_memory();
+        return *this;
+    }
+    Bigint poweredModU(bi_uintmax n, const Bigint &mod) const {return Bigint(*this).powerModU(n, mod);}
+    Bigint poweredMod(bi_intmax n, const Bigint &mod) const {return Bigint(*this).powerMod(n, mod);}
+    Bigint poweredMod(const Bigint &n, const Bigint &mod) const {return Bigint(*this).powerMod(n, mod);}
 
     Bigint &divideBy(const Bigint &other)
     {
