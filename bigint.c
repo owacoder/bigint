@@ -2358,6 +2358,120 @@ bigint *bi_fact(bi_uintmax n)
     return result;
 }
 
+/* calculates nth Fibonacci number and returns the result in a new bigint */
+/* returns NULL on out of memory condition */
+/* pseudocode at http://stackoverflow.com/a/1526036/5264388 */
+bigint *bi_fibonacci(bi_uintmax n)
+{
+    bigint *a = NULL, *b = NULL, *p = NULL, *q = NULL, *temp = NULL, *temp2 = NULL;
+
+    if ((a = bi_new()) == NULL ||
+        (b = bi_new()) == NULL ||
+        (p = bi_new()) == NULL ||
+        (q = bi_new()) == NULL ||
+        (a = bi_assignu(a, 1)) == NULL ||
+        (q = bi_assignu(q, 1)) == NULL)
+        goto cleanup;
+
+    while (n > 0)
+    {
+        if (n & 1)
+        {
+            // TODO: complete the algorithm
+            if ((temp = bi_mul(a, q)) == NULL ||
+                (temp2 = bi_mul(b, q)) == NULL ||
+                (a = bi_mul_assign(a, p)) == NULL ||
+                (a = bi_add_assign(a, temp)) == NULL ||
+                (a = bi_add_assign(a, temp2)) == NULL ||
+                (b = bi_mul_assign(b, p)) == NULL ||
+                (b = bi_add_assign(b, temp)) == NULL)
+                goto cleanup;
+            bi_destroy(temp);
+            bi_destroy(temp2);
+            --n;
+        }
+        else
+        {
+            if ((temp = bi_square(q)) == NULL ||
+                (temp2 = bi_mul(p, q)) == NULL ||
+                (p = bi_square_assign(p)) == NULL ||
+                (p = bi_add_assign(p, temp)) == NULL ||
+                (temp2 = bi_shl1_assign(temp2)) == NULL ||
+                (temp2 = bi_add_assign(temp2, temp)) == NULL)
+                goto cleanup;
+            bi_swap(q, temp2);
+            bi_destroy(temp);
+            bi_destroy(temp2);
+            n >>= 1;
+        }
+    }
+
+    bi_destroy(a);
+    bi_destroy(p);
+    bi_destroy(q);
+    return b;
+
+cleanup:
+    bi_destroy(a);
+    bi_destroy(b);
+    bi_destroy(p);
+    bi_destroy(q);
+    bi_destroy(temp);
+    bi_destroy(temp2);
+    return NULL;
+}
+
+/* returns 1 if bi is a Fibonacci number, returns 0 if not */
+/* returns -1 on out of memory condition */
+int bi_is_fibonacci(const bigint *bi)
+{
+    bigint *square, *sqrt = NULL;
+
+    /* compute 5x^2 + 4 */
+    if ((square = bi_square(bi)) == NULL ||
+        (square = bi_mul_immediateu_assign(square, 5)) == NULL ||
+        (square = bi_add_immediate(square, 4)) == NULL ||
+        (sqrt = bi_sqrt(square)) == NULL ||
+        (sqrt = bi_square_assign(sqrt)) == NULL)
+        goto cleanup;
+
+    /* test if it's a perfect square */
+    if (bi_cmp(square, sqrt) == 0)
+    {
+        bi_destroy(square);
+        bi_destroy(sqrt);
+        return 1;
+    }
+    else
+    {
+        bi_destroy(sqrt);
+        sqrt = NULL;
+    }
+
+    /* compute 5x^2 - 4 */
+    if ((square = bi_sub_immediate(square, 8)) == NULL ||
+        (sqrt = bi_sqrt(square)) == NULL ||
+        (sqrt = bi_square_assign(sqrt)) == NULL)
+        goto cleanup;
+
+    /* test if it's a perfect square */
+    if (bi_cmp(square, sqrt) == 0)
+    {
+        bi_destroy(square);
+        bi_destroy(sqrt);
+        return 1;
+    }
+
+    bi_destroy(square);
+    bi_destroy(sqrt);
+    return 0;
+
+cleanup:
+    bi_destroy(square);
+    bi_destroy(sqrt);
+    return -1;
+}
+
 /* raises bi to the nth power and returns the result in a new bigint */
 /* returns NULL on out of memory condition */
 bigint *bi_uexp(const bigint *bi, bi_uintmax n)

@@ -193,6 +193,8 @@ bigint *bi_square_assign(bigint *bi);
 bigint *bi_sqrt(const bigint *bi);
 bigint *bi_sqrt_assign(bigint *bi);
 bigint *bi_fact(bi_uintmax n);
+bigint *bi_fibonacci(bi_uintmax n);
+int bi_is_fibonacci(const bigint *bi);
 bigint *bi_uexp(const bigint *bi, bi_uintmax n);
 bigint *bi_uexp_assign(bigint *bi, bi_uintmax n);
 bigint *bi_exp(const bigint *bi, bi_intmax n);
@@ -259,6 +261,7 @@ public:
     bigint *&native_handle() {return d;}
 
     Bigint() : d(bi_new()) {if (d == NULL) throw out_of_memory();}
+    Bigint(int n) : d(bi_new()) {if (d == NULL || bi_assignl(d, n) == NULL) throw out_of_memory();}
     Bigint(bi_intmax n) : d(bi_new()) {if (d == NULL || bi_assignl(d, n) == NULL) throw out_of_memory();}
     Bigint(const char *s) : d(bi_new()) {if (d == NULL || bi_sscan(s, d, 10) < 0) throw out_of_memory();}
     Bigint(const std::string &s) : d(bi_new()) {if (d == NULL || bi_sscan_n(s.c_str(), s.size(), d, 10) < 0) throw out_of_memory();}
@@ -457,6 +460,20 @@ public:
         bigint *d = bi_fact(n);
         if (d == NULL) throw out_of_memory();
         return Bigint(d);
+    }
+
+    static Bigint fibonacci(bi_uintmax n)
+    {
+        bigint *d = bi_fibonacci(n);
+        if (d == NULL) throw out_of_memory();
+        return Bigint(d);
+    }
+
+    static bool isFibonacci(const Bigint &n)
+    {
+        int r = bi_is_fibonacci(n.d);
+        if (r < 0) throw out_of_memory();
+        return r;
     }
 
     Bigint &power(bi_uintmax n)
