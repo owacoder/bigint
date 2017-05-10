@@ -56,7 +56,7 @@ Here is the same example program written with the C++ interface:
  - Comparison: By value, by magnitude.
  - Exponential functions: square (faster than basic multiplication), square root, raise to power, log2.
  - Optional exponential functions (without BIGINT_DISABLE_LIBMATH defined): log10, logn (any integral base n >= 2)
- - Additional functions: abs, negate, factorial, GCD.
+ - Additional functions: abs, negate, factorial, Fibonacci, GCD.
  - Input/Output: scan in base 2-256 from `FILE*` or `char*`, print in base 2-256 to `FILE*` or `char*`.
     
 # Compile flags
