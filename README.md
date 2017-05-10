@@ -38,10 +38,7 @@ Here is the same example program written with the C++ interface:
             Bigint b = 2;
 
             for (size_t i = 0; i < 10; ++i)
-            {
-                b.square();
-                std::cout << b.toString() << std::endl;
-            }
+                std::cout << b.square() << std::endl;
         } catch (Bigint::out_of_memory) {
             return 1;
         }
