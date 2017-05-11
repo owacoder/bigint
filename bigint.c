@@ -129,6 +129,86 @@ bigint *bi_new()
     return bi_new_sized(BIGINT_MINLEAFS);
 }
 
+bigint *bi_new_valueu(bi_leaf value)
+{
+    bigint *b = bi_new_sized(BIGINT_MINLEAFS);
+    if (b == NULL || bi_assignu(b, value) == NULL)
+        return NULL;
+    return b;
+}
+
+bigint *bi_new_value(bi_signed_leaf value)
+{
+    bigint *b = bi_new_sized(BIGINT_MINLEAFS);
+    if (b == NULL || bi_assign(b, value) == NULL)
+        return NULL;
+    return b;
+}
+
+bigint *bi_new_valuelu(bi_uintmax value)
+{
+    bigint *b = bi_new_sized(BIGINT_MINLEAFS);
+    if (b == NULL || bi_assignlu(b, value) == NULL)
+        return NULL;
+    return b;
+}
+
+bigint *bi_new_valuel(bi_intmax value)
+{
+    bigint *b = bi_new_sized(BIGINT_MINLEAFS);
+    if (b == NULL || bi_assignl(b, value) == NULL)
+        return NULL;
+    return b;
+}
+
+/* returns a bigint with the value 0 */
+bigint bi_zero()
+{
+    static bi_leaf leaf = 0;
+    bigint b;
+
+    b.data = &leaf;
+    b.size = 1;
+    b.sign = 0;
+    return b;
+}
+
+/* returns a bigint with the value 1 */
+bigint bi_one()
+{
+    static bi_leaf leaf = 1;
+    bigint b;
+
+    b.data = &leaf;
+    b.size = 1;
+    b.sign = 0;
+    return b;
+}
+
+/* returns a bigint with the value 2 */
+bigint bi_two()
+{
+    static bi_leaf leaf = 2;
+    bigint b;
+
+    b.data = &leaf;
+    b.size = 1;
+    b.sign = 0;
+    return b;
+}
+
+/* returns a bigint with the value -1 */
+bigint bi_minus_one()
+{
+    static bi_leaf leaf = 1;
+    bigint b;
+
+    b.data = &leaf;
+    b.size = 1;
+    b.sign = 1;
+    return b;
+}
+
 /* create a direct copy of bi and return it */
 /* returns NULL on out of memory condition */
 bigint *bi_copy(const bigint *bi)
@@ -488,9 +568,8 @@ int bi_logn(const bigint *bi, uintmax_t n)
     else if (n == 2)
         return approx;
 
-    t = bi_new();
-    if (bi_assign(t, n) == NULL ||
-        bi_uexp_assign(t, approx+1) == NULL) return -2;
+    t = bi_new_valuelu(n);
+    if (t == NULL || bi_uexp_assign(t, approx+1) == NULL) return -2;
     approx += bi_cmp_mag(bi, t) >= 0;
     bi_destroy(t);
 
@@ -509,9 +588,8 @@ long long bi_lognl(const bigint *bi, uintmax_t n)
     else if (n == 2)
         return approx;
 
-    t = bi_new();
-    if (bi_assign(t, n) == NULL ||
-        bi_uexp_assign(t, approx+1) == NULL) return -2;
+    t = bi_new_valuelu(n);
+    if (t == NULL || bi_uexp_assign(t, approx+1) == NULL) return -2;
     approx += bi_cmp_mag(bi, t) >= 0;
     bi_destroy(t);
 
@@ -1122,14 +1200,28 @@ static bigint *bi_mul_internal(const bigint *bi, const bigint *bi2, size_t sz, s
     result = bi_new_sized(max(sz + sz2, BIGINT_MINLEAFS));
     if (result == NULL) return NULL;
 
-    for (i = 0; i < sz + sz2; ++i)
+    for (i = 0; i < sz2; ++i)
     {
-        size_t j_start, j_end;
+        for (j = 0; j <= i; ++j)
+        {
+            bi_dleaf a, b, save;
 
-        j_start = i >= sz2? i - sz2 + 1: 0;
-        j_end = min(i, sz-1);
+            a = bi->data[j];
+            b = bi2->data[i - j];
 
-        for (j = j_start; j <= j_end; ++j)
+            save = low_carry;
+            low_carry += a * b;
+            high_carry += low_carry < save;
+        }
+
+        result->data[i] = low_carry;
+        low_carry = (low_carry >> BIGINT_LEAFBITS) | (high_carry << BIGINT_LEAFBITS);
+        high_carry >>= BIGINT_LEAFBITS;
+    }
+
+    for (; i < sz + sz2; ++i)
+    {
+        for (j = i - sz2 + 1; j < sz; ++j)
         {
             bi_dleaf a, b, save;
 
@@ -1989,14 +2081,28 @@ static bigint *bi_square_internal(const bigint *bi, size_t used_leafs)
     result = bi_new_sized(max(sz * 2, BIGINT_MINLEAFS));
     if (result == NULL) return NULL;
 
-    for (i = 0; i < sz * 2; ++i)
+    for (i = 0; i < sz; ++i)
     {
-        size_t j_start, j_end;
+        for (j = 0; j <= i; ++j)
+        {
+            bi_dleaf a, b, save;
 
-        j_start = i >= sz? i - sz + 1: 0;
-        j_end = min(i, sz-1);
+            a = bi->data[j];
+            b = bi->data[i - j];
 
-        for (j = j_start; j <= j_end; ++j)
+            save = low_carry;
+            low_carry += a * b;
+            high_carry += low_carry < save;
+        }
+
+        result->data[i] = low_carry;
+        low_carry = (low_carry >> BIGINT_LEAFBITS) | (high_carry << BIGINT_LEAFBITS);
+        high_carry >>= BIGINT_LEAFBITS;
+    }
+
+    for (; i < sz * 2; ++i)
+    {
+        for (j = i - sz + 1; j < sz; ++j)
         {
             bi_dleaf a, b, save;
 
@@ -2283,11 +2389,10 @@ bigint *bi_sqrt(const bigint *bi)
     if (sz == 0 || bi_is_negative(bi))
         return root;
 
-    bit = bi_new();
+    bit = bi_new_valueu(1);
     if (root == NULL || bit == NULL)
         goto cleanup;
 
-    bi_assign(bit, 1);
     if ((bit = bi_shl_assign(bit, (sz-1)/2*2)) == NULL) goto cleanup;
 
     while (bi_cmp(bit, bi) > 0)
@@ -2343,11 +2448,10 @@ bigint *bi_sqrt_assign(bigint *bi)
 /* returns NULL on out of memory condition */
 bigint *bi_fact(bi_uintmax n)
 {
-    bigint *result = bi_new(), *mult = bi_new();
+    bigint *result = bi_new_valueu(1), *mult = bi_new();
     bi_uintmax i = 1;
 
     if (result == NULL || mult == NULL) {bi_destroy(result); bi_destroy(mult); return NULL;}
-    bi_assign(result, 1);
 
     for (; i < n; ++i)
     {
@@ -2365,12 +2469,10 @@ bigint *bi_fibonacci(bi_uintmax n)
 {
     bigint *a = NULL, *b = NULL, *p = NULL, *q = NULL, *temp = NULL, *temp2 = NULL;
 
-    if ((a = bi_new()) == NULL ||
+    if ((a = bi_new_valueu(1)) == NULL ||
         (b = bi_new()) == NULL ||
         (p = bi_new()) == NULL ||
-        (q = bi_new()) == NULL ||
-        (a = bi_assignu(a, 1)) == NULL ||
-        (q = bi_assignu(q, 1)) == NULL)
+        (q = bi_new_valueu(1)) == NULL)
         goto cleanup;
 
     while (n > 0)
@@ -2492,8 +2594,8 @@ bigint *bi_uexp_assign(bigint *bi, bi_uintmax n)
     else if (n == 0) return bi_assignu(bi, 1);
     else if (bi_is_one(bi)) return bi;
 
-    y = bi_new();
-    if (y == NULL || bi_assign(y, 1) == NULL)
+    y = bi_new_valueu(1);
+    if (y == NULL)
     {
         bi_destroy(y);
         return NULL;
@@ -2549,8 +2651,8 @@ bigint *bi_uexp_mod_assign(bigint *bi, bi_uintmax n, const bigint *mod)
     else if (n == 0) return bi_assignu(bi, 1);
     else if (bi_is_one(bi)) return bi;
 
-    y = bi_new();
-    if (y == NULL || bi_assign(y, 1) == NULL)
+    y = bi_new_valueu(1);
+    if (y == NULL)
     {
         bi_destroy(y);
         return NULL;
@@ -2617,8 +2719,8 @@ bigint *bi_large_exp_mod_assign(bigint *bi, const bigint *n, const bigint *mod)
     else if (bi_is_zero(n)) return bi_assignu(bi, 1);
     else if (bi_is_one(bi)) return bi;
 
-    y = bi_new();
-    if (y == NULL || bi_assign(y, 1) == NULL)
+    y = bi_new_valueu(1);
+    if (y == NULL)
     {
         bi_destroy(y);
         return NULL;
@@ -2661,9 +2763,8 @@ static bigint *bi_divmod_internal(bigint *dst, const bigint *bi, const bigint *b
         {
             bi_signed_leaf l;
             if (bi_divmod_immediate_internal(dst, bi, bi_to_int(bi2), q, &l) == NULL) return NULL;
-            *r = bi_new();
+            *r = bi_new_value(l);
             if (*r == NULL) {bi_destroy(*q); return NULL;}
-            bi_assign(*r, l);
             return *q;
         }
     }

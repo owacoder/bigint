@@ -117,7 +117,15 @@ typedef struct
     size_t size, sign; //sign: 0 = positive, 1 = negative
 } bigint;
 
+bigint bi_zero();
+bigint bi_one();
+bigint bi_two();
+bigint bi_minus_one();
 bigint *bi_new();
+bigint *bi_new_valueu(bi_leaf value);
+bigint *bi_new_value(bi_signed_leaf value);
+bigint *bi_new_valuelu(bi_uintmax value);
+bigint *bi_new_valuel(bi_intmax value);
 bigint *bi_copy(const bigint *bi);
 bigint *bi_copy_mag_to(bigint *dst, const bigint *src);
 bigint *bi_copy_to(bigint *dst, const bigint *src);
@@ -261,8 +269,8 @@ public:
     bigint *&native_handle() {return d;}
 
     Bigint() : d(bi_new()) {if (d == NULL) throw out_of_memory();}
-    Bigint(int n) : d(bi_new()) {if (d == NULL || bi_assignl(d, n) == NULL) throw out_of_memory();}
-    Bigint(bi_intmax n) : d(bi_new()) {if (d == NULL || bi_assignl(d, n) == NULL) throw out_of_memory();}
+    Bigint(int n) : d(bi_new_valuel(n)) {if (d == NULL) throw out_of_memory();}
+    Bigint(bi_intmax n) : d(bi_new_valuel(n)) {if (d == NULL) throw out_of_memory();}
     Bigint(const char *s) : d(bi_new()) {if (d == NULL || bi_sscan(s, d, 10) < 0) throw out_of_memory();}
     Bigint(const std::string &s) : d(bi_new()) {if (d == NULL || bi_sscan_n(s.c_str(), s.size(), d, 10) < 0) throw out_of_memory();}
     Bigint(const Bigint &other) : d(bi_copy(other.d)) {if (d == NULL) throw out_of_memory();}
@@ -421,7 +429,7 @@ public:
     }
     Bigint added(const Bigint &other) const {return Bigint(*this).add(other);}
     Bigint &operator+=(const Bigint &other) {return add(other);}
-    Bigint operator+(const Bigint &other) const {return Bigint(*this).add(other);}
+    friend Bigint operator+(const Bigint &lhs, const Bigint &rhs) {return lhs.added(rhs);}
 
     Bigint &subtract(const Bigint &other)
     {
@@ -430,7 +438,7 @@ public:
     }
     Bigint subtracted(const Bigint &other) const {return Bigint(*this).subtract(other);}
     Bigint &operator-=(const Bigint &other) {return subtract(other);}
-    Bigint operator-(const Bigint &other) const {return Bigint(*this).subtract(other);}
+    friend Bigint operator-(const Bigint &lhs, const Bigint &rhs) {return lhs.subtracted(rhs);}
 
     Bigint &multiplyBy(const Bigint &other)
     {
@@ -439,7 +447,7 @@ public:
     }
     Bigint multiplied(const Bigint &other) const {return Bigint(*this).multiplyBy(other);}
     Bigint &operator*=(const Bigint &other) {return multiplyBy(other);}
-    Bigint operator*(const Bigint &other) const {return Bigint(*this).multiplyBy(other);}
+    friend Bigint operator*(const Bigint &lhs, const Bigint &rhs) {return lhs.multiplied(rhs);}
 
     Bigint &square()
     {
@@ -476,7 +484,7 @@ public:
         return r;
     }
 
-    Bigint &power(bi_uintmax n)
+    Bigint &powerU(bi_uintmax n)
     {
         if ((d = bi_uexp_assign(d, n)) == NULL) throw out_of_memory();
         return *this;
@@ -486,7 +494,7 @@ public:
         if ((d = bi_exp_assign(d, n)) == NULL) throw out_of_memory();
         return *this;
     }
-    Bigint powered(bi_uintmax n) const {return Bigint(*this).power(n);}
+    Bigint poweredU(bi_uintmax n) const {return Bigint(*this).power(n);}
     Bigint powered(bi_intmax n) const {return Bigint(*this).power(n);}
     Bigint &powerModU(bi_uintmax n, const Bigint &mod)
     {
@@ -515,7 +523,7 @@ public:
     }
     Bigint divided(const Bigint &other) const {return Bigint(*this).divideBy(other);}
     Bigint &operator/=(const Bigint &other) {return divideBy(other);}
-    Bigint operator/(const Bigint &other) const {return Bigint(*this).divideBy(other);}
+    friend Bigint operator/(const Bigint &lhs, const Bigint &rhs) {return lhs.divided(rhs);}
 
     Bigint &moduloBy(const Bigint &other)
     {
@@ -525,7 +533,7 @@ public:
     }
     Bigint modulo(const Bigint &other) const {return Bigint(*this).moduloBy(other);}
     Bigint &operator%=(const Bigint &other) {return moduloBy(other);}
-    Bigint operator%(const Bigint &other) const {return Bigint(*this).moduloBy(other);}
+    friend Bigint operator%(const Bigint &lhs, const Bigint &rhs) {return lhs.modulo(rhs);}
 
     Bigint &gcdAssign(const Bigint &other)
     {
@@ -562,6 +570,13 @@ public:
         bis_destroy(bstr);
         return str;
     }
+
+    friend bool operator<(const Bigint &lhs, const Bigint &rhs) {return lhs.compare(rhs) < 0;}
+    friend bool operator>(const Bigint &lhs, const Bigint &rhs) {return lhs.compare(rhs) > 0;}
+    friend bool operator<=(const Bigint &lhs, const Bigint &rhs) {return lhs.compare(rhs) <= 0;}
+    friend bool operator>=(const Bigint &lhs, const Bigint &rhs) {return lhs.compare(rhs) >= 0;}
+    friend bool operator==(const Bigint &lhs, const Bigint &rhs) {return lhs.compare(rhs) == 0;}
+    friend bool operator!=(const Bigint &lhs, const Bigint &rhs) {return lhs.compare(rhs) != 0;}
 
     friend std::istream &operator>>(std::istream &in, Bigint &bi)
     {
