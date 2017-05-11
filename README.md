@@ -3,7 +3,7 @@ Arbitrary precision math library
 
 To use this library, simply include the relevant source and header files in your project.
 The bigfrac library depends on the bigint library, but the bigint library only depends on
-the standard C (or C++, if compiled with __cplusplus defined) library.
+the standard C (or C++, if compiled with `__cplusplus` defined) library.
 
 If using the raw C interface, return values should be checked to verify that the library
 has not run out of memory. The C++ interface will throw an out-of-memory error when necessary.
