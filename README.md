@@ -12,10 +12,10 @@ A small example program using the C interface:
 
     int main()
     {
-        bigint *b = bi_new();
+        bigint *b = bi_new_value(2);
         size_t i;
         
-        if (b == NULL || bi_assign(b, 2) == NULL)
+        if (b == NULL)
             return 1;
         
         for (i = 0; i < 10; ++i)
@@ -44,6 +44,45 @@ Here is the same example program written with the C++ interface:
         }
         
         return 0;
+    }
+    
+When using the C API, and when more than one bigint is used in a certain algorithm, the results of functions should be assigned back to the pointer, for easier cleanup. For example:
+
+    int f()
+    {
+        bigint *b = bi_new_value(0);
+        bigint *c = bi_new_value(1);
+        size_t i;
+        
+        if (b == NULL || c == NULL)
+            goto cleanup;
+        
+        for (i = 0; i < 10; ++i)
+        {
+            // In the following `if` statement, the assignment back to the pointers nullifies the pointer if out of memory.
+            // Since the `xxx_assign` functions destroy the destination argument, this will prevent the destination argument from
+            // being doubly freed; once in the `xxx_assign` function and once in the `cleanup` routine.
+            if ((b = bi_square_assign(b)) == NULL ||
+                (c = bi_square_assign(c)) == NULL ||
+                (b = bi_add_assign(b, c)) == NULL)
+                goto cleanup;
+            bi_print(b, 10);
+            puts("");
+        }
+        
+        bi_destroy(b);
+        bi_destroy(c);
+        return 0;
+        
+    cleanup:
+        bi_destroy(b);
+        bi_destroy(c);
+        return 1;
+    }
+    
+    int main()
+    {
+        return f();
     }
     
 # Features
