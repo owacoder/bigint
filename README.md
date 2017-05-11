@@ -50,8 +50,8 @@ When using the C API, and when more than one bigint is used in a certain algorit
 
     int f()
     {
-        bigint *b = bi_new_value(0);
-        bigint *c = bi_new_value(1);
+        bigint *b = bi_new_value(1);
+        bigint *c = bi_new_value(2);
         size_t i;
         
         if (b == NULL || c == NULL)
