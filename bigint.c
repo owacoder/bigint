@@ -12,6 +12,10 @@
 #include <math.h>
 #endif
 
+#ifdef BIGINT_ENABLE_WINTHREADS
+#include <windows.h>
+#endif
+
 #ifdef BIGINT_ENABLE_PTHREADS
 #include <pthread.h>
 #endif
@@ -1241,9 +1245,51 @@ static bigint *bi_mul_internal(const bigint *bi, const bigint *bi2, size_t sz, s
     return result;
 }
 
+#ifdef BIGINT_ENABLE_WINTHREADS
+static bigint *bi_karatsuba_mul(const bigint *bi, const bigint *bi2, size_t bi_used_leafs, size_t bi2_used_leafs, int use_threads);
+static bigint *bi_toom_cook_mul(const bigint *bi, const bigint *bi2, size_t bi_used_leafs, size_t bi2_used_leafs, int use_threads);
+static bigint *bi_karatsuba_square(const bigint *bi, size_t bi_used_leafs, int use_threads);
+static bigint *bi_toom_cook_square(const bigint *bi, size_t bi_used_leafs, int use_threads);
+
+struct bigint_winthread_metadata
+{
+    bigint *op1, *op2, *result;
+    size_t used1, used2;
+};
+
+DWORD WINAPI bi_karatsuba_winthread(LPVOID p)
+{
+    struct bigint_winthread_metadata *mdata = (struct bigint_winthread_metadata *) p;
+    mdata->result = bi_karatsuba_mul(mdata->op1, mdata->op2, mdata->used1, mdata->used2, 0);
+    return 0;
+}
+
+DWORD WINAPI bi_toom_cook_winthread(LPVOID p)
+{
+    struct bigint_winthread_metadata *mdata = (struct bigint_winthread_metadata *) p;
+    mdata->result = bi_toom_cook_mul(mdata->op1, mdata->op2, mdata->used1, mdata->used2, 0);
+    return 0;
+}
+
+DWORD WINAPI bi_karatsuba_winthread_square(LPVOID p)
+{
+    struct bigint_winthread_metadata *mdata = (struct bigint_winthread_metadata *) p;
+    mdata->result = bi_karatsuba_square(mdata->op1, mdata->used1, 0);
+    return 0;
+}
+
+DWORD WINAPI bi_toom_cook_winthread_square(LPVOID p)
+{
+    struct bigint_winthread_metadata *mdata = (struct bigint_winthread_metadata *) p;
+    mdata->result = bi_toom_cook_square(mdata->op1, mdata->used1, 0);
+    return 0;
+}
+#endif
 #ifdef BIGINT_ENABLE_PTHREADS
 static bigint *bi_karatsuba_mul(const bigint *bi, const bigint *bi2, size_t bi_used_leafs, size_t bi2_used_leafs, int use_pthreads);
 static bigint *bi_toom_cook_mul(const bigint *bi, const bigint *bi2, size_t bi_used_leafs, size_t bi2_used_leafs, int use_pthreads);
+static bigint *bi_karatsuba_square(const bigint *bi, size_t bi_used_leafs, int use_threads);
+static bigint *bi_toom_cook_square(const bigint *bi, size_t bi_used_leafs, int use_threads);
 
 struct bigint_pthread_metadata
 {
@@ -1251,27 +1297,42 @@ struct bigint_pthread_metadata
     size_t used1, used2;
 };
 
-void *bi_karatsuba_pthread(void *p)
+static void *bi_karatsuba_pthread(void *p)
 {
     struct bigint_pthread_metadata *mdata = (struct bigint_pthread_metadata *) p;
     return bi_karatsuba_mul(mdata->op1, mdata->op2, mdata->used1, mdata->used2, 0);
 }
 
-void *bi_toom_cook_pthread(void *p)
+static void *bi_toom_cook_pthread(void *p)
 {
     struct bigint_pthread_metadata *mdata = (struct bigint_pthread_metadata *) p;
     return bi_toom_cook_mul(mdata->op1, mdata->op2, mdata->used1, mdata->used2, 0);
+}
+
+static void *bi_karatsuba_pthread_square(void *p)
+{
+    struct bigint_pthread_metadata *mdata = (struct bigint_pthread_metadata *) p;
+    return bi_karatsuba_square(mdata->op1, mdata->used1, 0);
+}
+
+static void *bi_toom_cook_pthread_square(void *p)
+{
+    struct bigint_pthread_metadata *mdata = (struct bigint_pthread_metadata *) p;
+    return bi_toom_cook_square(mdata->op1, mdata->used1, 0);
 }
 #endif
 
 /* multiplies bi and bi2 using Karatsuba multiplication, reverting to standard multiplication with small enough chunks */
 /* returns NULL on out of memory condition; the parameters are not destroyed */
-#ifdef BIGINT_ENABLE_PTHREADS
-static bigint *bi_karatsuba_mul(const bigint *bi, const bigint *bi2, size_t bi_used_leafs, size_t bi2_used_leafs, int use_pthreads)
+#if defined(BIGINT_ENABLE_PTHREADS) || defined(BIGINT_ENABLE_WINTHREADS)
+static bigint *bi_karatsuba_mul(const bigint *bi, const bigint *bi2, size_t bi_used_leafs, size_t bi2_used_leafs, int use_threads)
 #else
 static bigint *bi_karatsuba_mul(const bigint *bi, const bigint *bi2, size_t bi_used_leafs, size_t bi2_used_leafs)
 #endif
 {
+#ifdef BIGINT_ENABLE_WINTHREADS
+    HANDLE thread[3] = {NULL, NULL, NULL};
+#endif
     if (bi_used_leafs < BIGINT_KARATSUBA_MIN_LEAFS || bi2_used_leafs < BIGINT_KARATSUBA_MIN_LEAFS)
         return bi_mul_internal(bi, bi2, bi_used_leafs, bi2_used_leafs);
     else
@@ -1302,7 +1363,7 @@ static bigint *bi_karatsuba_mul(const bigint *bi, const bigint *bi2, size_t bi_u
             high2.size = 0;
 
 #ifdef BIGINT_ENABLE_PTHREADS
-        if (use_pthreads)
+        if (use_threads)
         {
             void *vz0, *vz1, *vz2;
             pthread_t low_thread, mid_thread, high_thread;
@@ -1391,6 +1452,93 @@ static bigint *bi_karatsuba_mul(const bigint *bi, const bigint *bi2, size_t bi_u
         if ((z2 = bi_shl_leaf_assign(z2, m)) == NULL) goto cleanup;
         if (z0 != NULL && (z2 = bi_add_assign(z2, z0)) == NULL) goto cleanup;
         bi_destroy(z0);
+#elif defined(BIGINT_ENABLE_WINTHREADS)
+        if (use_threads)
+        {
+            struct bigint_winthread_metadata low_data, mid_data, high_data;
+
+            low_data.op1 = &low1;
+            low_data.op2 = &low2;
+            low_data.used1 = bi_used(&low1);
+            low_data.used2 = bi_used(&low2);
+
+            if (high1.size)
+                temp = bi_add(&low1, &high1);
+            else
+                temp = &low1;
+            if (temp == NULL) goto cleanup;
+            if (high2.size)
+                temp2 = bi_add(&low2, &high2);
+            else
+                temp2 = &low2;
+            if (temp2 == NULL) goto cleanup;
+
+            mid_data.op1 = temp;
+            mid_data.op2 = temp2;
+            mid_data.used1 = bi_used(temp);
+            mid_data.used2 = bi_used(temp2);
+
+            high_data.op1 = &high1;
+            high_data.op2 = &high2;
+            high_data.used1 = bi_used(&high1);
+            high_data.used2 = bi_used(&high2);
+
+            if ((thread[0] = CreateThread(NULL, 0, bi_karatsuba_winthread, &low_data, 0, NULL)) == NULL ||
+                (thread[1] = CreateThread(NULL, 0, bi_karatsuba_winthread, &mid_data, 0, NULL)) == NULL ||
+                (thread[2] = CreateThread(NULL, 0, bi_karatsuba_winthread, &high_data, 0, NULL)) == NULL)
+                goto cleanup;
+
+            WaitForMultipleObjects(3, thread, TRUE, INFINITE);
+
+            CloseHandle(thread[0]);
+            CloseHandle(thread[1]);
+            CloseHandle(thread[2]);
+
+            z0 = low_data.result;
+            z1 = mid_data.result;
+            z2 = high_data.result;
+
+            if (temp != &low1) bi_destroy(temp); temp=NULL;
+            if (temp2 != &low2) bi_destroy(temp2); temp2=NULL;
+        }
+        else
+        {
+            used1 = bi_used(&low1);
+            used2 = bi_used(&low2);
+            if (used1 && used2)
+            {
+                z0 = bi_karatsuba_mul(&low1, &low2, used1, used2, 0);
+                if (z0 == NULL) goto cleanup;
+            }
+            /* calculate z1 = (low1 + high1) * (low2 + high2) */
+            if (high1.size)
+                temp = bi_add(&low1, &high1);
+            else
+                temp = &low1;
+            if (temp == NULL) goto cleanup;
+            if (high2.size)
+                temp2 = bi_add(&low2, &high2);
+            else
+                temp2 = &low2;
+            if (temp2 == NULL) goto cleanup;
+            z1 = bi_karatsuba_mul(temp, temp2, bi_used(temp), bi_used(temp2), 0);
+            if (z1 == NULL) goto cleanup;
+            if (temp != &low1) bi_destroy(temp); temp=NULL;
+            if (temp2 != &low2) bi_destroy(temp2); temp2=NULL;
+            /* calculate z2 = high1 * high2 */
+            z2 = bi_karatsuba_mul(&high1, &high2, bi_used(&high1), bi_used(&high2), 0);
+            if (z2 == NULL) goto cleanup;
+        }
+        /* calculate z1 = z1 - z2 - z0 */
+        bi_fast_sub_assign(z1, z2);
+        if (z0 != NULL) bi_fast_sub_assign(z1, z0);
+        /* calculate z2 = z2 * 2^(2*m) + z1 * 2^m + z0 */
+        if ((z2 = bi_shl_leaf_assign(z2, m)) == NULL) goto cleanup;
+        if ((z2 = bi_add_assign(z2, z1)) == NULL) goto cleanup;
+        bi_destroy(z1); z1=NULL;
+        if ((z2 = bi_shl_leaf_assign(z2, m)) == NULL) goto cleanup;
+        if (z0 != NULL && (z2 = bi_add_assign(z2, z0)) == NULL) goto cleanup;
+        bi_destroy(z0);
 #else
         used1 = bi_used(&low1);
         used2 = bi_used(&low2);
@@ -1437,6 +1585,11 @@ cleanup:
         if (temp2 != &low2) bi_destroy(temp2);
         bi_destroy(z1);
         bi_destroy(z2);
+#ifdef BIGINT_ENABLE_WINTHREADS
+        if (thread[0] != NULL) CloseHandle(thread[0]);
+        if (thread[1] != NULL) CloseHandle(thread[1]);
+        if (thread[2] != NULL) CloseHandle(thread[2]);
+#endif
         return NULL;
     }
 }
@@ -1444,7 +1597,7 @@ cleanup:
 /* multiplies bi and bi2 using Toom-3 multiplication, reverting to standard multiplication with small enough chunks */
 /* returns NULL on out of memory condition; the parameters are not destroyed */
 #ifdef BIGINT_ENABLE_PTHREADS
-static bigint *bi_toom_cook_mul(const bigint *bi, const bigint *bi2, size_t bi_used_leafs, size_t bi2_used_leafs, int use_pthreads)
+static bigint *bi_toom_cook_mul(const bigint *bi, const bigint *bi2, size_t bi_used_leafs, size_t bi2_used_leafs, int use_threads)
 {
     if (bi_used_leafs < BIGINT_TOOM_COOK_MIN_LEAFS || bi2_used_leafs < BIGINT_TOOM_COOK_MIN_LEAFS)
         return bi_karatsuba_mul(bi, bi2, bi_used_leafs, bi2_used_leafs, 0);
@@ -1513,7 +1666,7 @@ static bigint *bi_toom_cook_mul(const bigint *bi, const bigint *bi2, size_t bi_u
         else
             intermediate2 = &low2;
 
-        if (use_pthreads)
+        if (use_threads)
         {
             void *vp0, *vp1, *vp2, *vp3, *vp4;
             pthread_t p0_thread, p1_thread, p2_thread, p3_thread, p4_thread;
@@ -1712,6 +1865,295 @@ static bigint *bi_toom_cook_mul(const bigint *bi, const bigint *bi2, size_t bi_u
         return r4;
 
 cleanup:
+        bi_destroy(r1);
+        bi_destroy(r2);
+        bi_destroy(r3);
+
+        bi_destroy(p0);
+        bi_destroy(temp);
+        bi_destroy(temp2);
+        bi_destroy(temp3);
+        bi_destroy(temp4);
+        bi_destroy(temp5);
+        bi_destroy(temp6);
+        if (intermediate1 != &low1) bi_destroy(intermediate1);
+        if (intermediate2 != &low2) bi_destroy(intermediate2);
+        bi_destroy(p1);
+        bi_destroy(p2);
+        bi_destroy(p3);
+        bi_destroy(p4);
+        return NULL;
+    }
+}
+#elif defined(BIGINT_ENABLE_WINTHREADS)
+static bigint *bi_toom_cook_mul(const bigint *bi, const bigint *bi2, size_t bi_used_leafs, size_t bi2_used_leafs, int use_threads)
+{
+    HANDLE thread[5] = {NULL, NULL, NULL, NULL, NULL};
+    if (bi_used_leafs < BIGINT_TOOM_COOK_MIN_LEAFS || bi2_used_leafs < BIGINT_TOOM_COOK_MIN_LEAFS)
+        return bi_karatsuba_mul(bi, bi2, bi_used_leafs, bi2_used_leafs, 0);
+    else
+    {
+        size_t m = max(bi_used_leafs, bi2_used_leafs) / 3 + 1;
+        size_t two_m = 2 * m;
+        bigint high1, mid1, low1, high2, mid2, low2;
+        bigint *p0 = NULL, *p1 = NULL, *p2 = NULL, *p3 = NULL, *p4 = NULL, *temp = NULL, *temp2 = NULL;
+        bigint *temp3 = NULL, *temp4 = NULL, *temp5 = NULL, *temp6 = NULL, *intermediate1 = NULL, *intermediate2 = NULL;
+        bigint *r0 = NULL, *r1 = NULL, *r2 = NULL, *r3 = NULL, *r4 = NULL;
+
+        low1 = mid1 = high1 = *bi;
+        low1.sign = mid1.sign = high1.sign = 0;
+        low1.size = min(m, bi_used_leafs);
+        if (bi_used_leafs > m)
+        {
+            mid1.data += m;
+            mid1.size = min(bi_used_leafs - m, m);
+            if (bi_used_leafs > two_m)
+            {
+                high1.data += two_m;
+                high1.size = bi_used_leafs - two_m;
+            }
+            else
+                high1.size = 0;
+        }
+        else
+            mid1.size = high1.size = 0;
+
+        low2 = mid2 = high2 = *bi2;
+        low2.sign = mid2.sign = high2.sign = 0;
+        low2.size = min(m, bi2_used_leafs);
+        if (bi2_used_leafs > m)
+        {
+            mid2.data += m;
+            mid2.size = min(bi2_used_leafs - m, m);
+            if (bi2_used_leafs > two_m)
+            {
+                high2.data += two_m;
+                high2.size = bi2_used_leafs - two_m;
+            }
+            else
+                high2.size = 0;
+        }
+        else
+            mid2.size = high2.size = 0;
+
+        /* for each quadratic polynomial (hx^2 + mx + l), using points (0, 1, -1, -2, infinity):
+         *   p0 = l
+         *   p1 = h + m + l
+         *   p2 = h - m + l
+         *   p3 = 4h - 2m + l
+         *   p4 = h
+         */
+
+        /* calculate intermediate1 = h + l */
+        if (high1.size)
+            intermediate1 = bi_add(&high1, &low1);
+        else
+            intermediate1 = &low1;
+
+        /* calculate intermediate2 = h + l */
+        if (high2.size)
+            intermediate2 = bi_add(&high2, &low2);
+        else
+            intermediate2 = &low2;
+
+        if (use_threads)
+        {
+            struct bigint_winthread_metadata p0_data, p1_data, p2_data, p3_data, p4_data;
+
+            // P0
+            p0_data.op1 = &low1;
+            p0_data.op2 = &low2;
+            p0_data.used1 = bi_used(&low1);
+            p0_data.used2 = bi_used(&low2);
+
+            // P1
+            temp = bi_add(intermediate1, &mid1);
+            if (temp == NULL) goto cleanup;
+
+            temp2 = bi_add(intermediate2, &mid2);
+            if (temp2 == NULL) goto cleanup;
+
+            p1_data.op1 = temp;
+            p1_data.op2 = temp2;
+            p1_data.used1 = bi_used(temp);
+            p1_data.used2 = bi_used(temp2);
+
+            // P2
+            temp3 = bi_sub(intermediate1, &mid1);
+            if (temp3 == NULL) goto cleanup;
+
+            temp4 = bi_sub(intermediate2, &mid2);
+            if (temp4 == NULL) goto cleanup;
+
+            p2_data.op1 = temp3;
+            p2_data.op2 = temp4;
+            p2_data.used1 = bi_used(temp3);
+            p2_data.used2 = bi_used(temp4);
+
+            // P3
+            temp5 = bi_copy(temp3);
+            if (temp5 == NULL) goto cleanup;
+
+            temp6 = bi_copy(temp4);
+            if (temp6 == NULL) goto cleanup;
+
+            if ((temp5 = bi_add_assign(temp5, &high1)) == NULL) goto cleanup;
+            if ((temp5 = bi_shl1_assign(temp5)) == NULL) goto cleanup;
+            if ((temp5 = bi_sub_assign(temp5, &low1)) == NULL) goto cleanup;
+
+            if ((temp6 = bi_add_assign(temp6, &high2)) == NULL) goto cleanup;
+            if ((temp6 = bi_shl1_assign(temp6)) == NULL) goto cleanup;
+            if ((temp6 = bi_sub_assign(temp6, &low2)) == NULL) goto cleanup;
+
+            p3_data.op1 = temp5;
+            p3_data.op2 = temp6;
+            p3_data.used1 = bi_used(temp5);
+            p3_data.used2 = bi_used(temp6);
+
+            // P4
+            p4_data.op1 = &high1;
+            p4_data.op2 = &high2;
+            p4_data.used1 = bi_used(&high1);
+            p4_data.used2 = bi_used(&high2);
+
+            if ((thread[0] = CreateThread(NULL, 0, bi_toom_cook_winthread, &p0_data, 0, NULL)) == NULL ||
+                (thread[1] = CreateThread(NULL, 0, bi_toom_cook_winthread, &p1_data, 0, NULL)) == NULL ||
+                (thread[2] = CreateThread(NULL, 0, bi_toom_cook_winthread, &p2_data, 0, NULL)) == NULL ||
+                (thread[3] = CreateThread(NULL, 0, bi_toom_cook_winthread, &p3_data, 0, NULL)) == NULL ||
+                (thread[4] = CreateThread(NULL, 0, bi_toom_cook_winthread, &p4_data, 0, NULL)) == NULL)
+                goto cleanup;
+
+            WaitForMultipleObjects(5, thread, TRUE, INFINITE);
+
+            CloseHandle(thread[0]);
+            CloseHandle(thread[1]);
+            CloseHandle(thread[2]);
+            CloseHandle(thread[3]);
+            CloseHandle(thread[4]);
+
+            p0 = p0_data.result;
+            p1 = p1_data.result;
+            p2 = p2_data.result;
+            p3 = p3_data.result;
+            p4 = p4_data.result;
+
+            bi_destroy(temp); temp=NULL;
+            bi_destroy(temp2); temp2=NULL;
+            bi_destroy(temp3); temp3=NULL;
+            bi_destroy(temp4); temp4=NULL;
+            bi_destroy(temp5); temp5=NULL;
+            bi_destroy(temp6); temp6=NULL;
+            if (intermediate1 != &low1) bi_destroy(intermediate1); intermediate1=NULL;
+            if (intermediate2 != &low2) bi_destroy(intermediate2); intermediate2=NULL;
+        }
+        else
+        {
+            /* calculate p0 = low1 * low2 */
+            p0 = bi_toom_cook_mul(&low1, &low2, bi_used(&low1), bi_used(&low2), 0);
+            if (p0 == NULL) goto cleanup;
+
+            /* calculate p1 = (low1 + mid1 + high1) * (low2 + mid2 + high2) */
+            temp = bi_add(intermediate1, &mid1);
+            if (temp == NULL) goto cleanup;
+
+            temp2 = bi_add(intermediate2, &mid2);
+            if (temp2 == NULL) goto cleanup;
+
+            p1 = bi_toom_cook_mul(temp, temp2, bi_used(temp), bi_used(temp2), 0);
+            if (p1 == NULL) goto cleanup;
+            bi_destroy(temp); temp=NULL;
+            bi_destroy(temp2); temp2=NULL;
+
+            /* calculate p2 = (low1 - mid1 + high1) * (low2 - mid2 + high2) */
+            temp = bi_sub(intermediate1, &mid1);
+            if (temp == NULL) goto cleanup;
+
+            temp2 = bi_sub(intermediate2, &mid2);
+            if (temp2 == NULL) goto cleanup;
+
+            p2 = bi_toom_cook_mul(temp, temp2, bi_used(temp), bi_used(temp2), 0);
+            if (p2 == NULL) goto cleanup;
+
+            if (intermediate1 != &low1) bi_destroy(intermediate1); intermediate1=NULL;
+            if (intermediate2 != &low2) bi_destroy(intermediate2); intermediate2=NULL;
+            // Do not cleanup temp and temp2 because the next step needs them
+
+            /* calculate p3 = (low1 - 2*mid1 + 4*high1) * (low2 - 2*mid2 + 4*high2) */
+            if ((temp = bi_add_assign(temp, &high1)) == NULL) goto cleanup;
+            if ((temp = bi_shl1_assign(temp)) == NULL) goto cleanup;
+            if ((temp = bi_sub_assign(temp, &low1)) == NULL) goto cleanup;
+
+            if ((temp2 = bi_add_assign(temp2, &high2)) == NULL) goto cleanup;
+            if ((temp2 = bi_shl1_assign(temp2)) == NULL) goto cleanup;
+            if ((temp2 = bi_sub_assign(temp2, &low2)) == NULL) goto cleanup;
+
+            p3 = bi_toom_cook_mul(temp, temp2, bi_used(temp), bi_used(temp2), 0);
+            if (p3 == NULL) goto cleanup;
+            bi_destroy(temp); temp=NULL;
+            bi_destroy(temp2); temp2=NULL;
+
+            /* calculate p4 = high1 * high2 */
+            p4 = bi_toom_cook_mul(&high1, &high2, bi_used(&high1), bi_used(&high2), 0);
+            if (p4 == NULL) goto cleanup;
+        }
+
+        /* calculate interpolation */
+        r0 = p0;
+        r4 = p4;
+
+        r3 = bi_sub(p3, p1);
+        bi_destroy(p3); p3=NULL; // p3 no longer needed
+        if (r3 == NULL) goto cleanup;
+        if ((r3 = bi_div_3_assign(r3)) == NULL) goto cleanup;
+
+        r1 = bi_sub(p1, p2);
+        if (r1 == NULL) goto cleanup;
+        (void) bi_shr_assign(r1, 1);
+        bi_destroy(p1); p1=NULL; // p1 no longer needed
+
+        r2 = bi_sub(p2, p0);
+        if (r2 == NULL) goto cleanup;
+        bi_destroy(p2); p2=NULL; // p2 no longer needed
+
+        (void) bi_negate_assign(r3);
+        if ((r3 = bi_add_assign(r3, r2)) == NULL) goto cleanup;
+        (void) bi_shr_assign(r3, 1);
+
+        temp = bi_shl1(r4);
+        if ((r3 = bi_add_assign(r3, temp)) == NULL) goto cleanup;
+        bi_destroy(temp); temp=NULL;
+
+        if ((r2 = bi_add_assign(r2, r1)) == NULL) goto cleanup;
+        if ((r2 = bi_sub_assign(r2, r4)) == NULL) goto cleanup;
+
+        if ((r1 = bi_sub_assign(r1, r3)) == NULL) goto cleanup;
+
+        if ((r4 = bi_shl_leaf_assign(r4, m)) == NULL) goto cleanup;
+        if ((r4 = bi_add_assign(r4, r3)) == NULL) goto cleanup;
+        bi_destroy(r3); r3=NULL;
+        if ((r4 = bi_shl_leaf_assign(r4, m)) == NULL) goto cleanup;
+        if ((r4 = bi_add_assign(r4, r2)) == NULL) goto cleanup;
+        bi_destroy(r2); r2=NULL;
+        if ((r4 = bi_shl_leaf_assign(r4, m)) == NULL) goto cleanup;
+        if ((r4 = bi_add_assign(r4, r1)) == NULL) goto cleanup;
+        bi_destroy(r1); r1=NULL;
+        if ((r4 = bi_shl_leaf_assign(r4, m)) == NULL) goto cleanup;
+        if ((r4 = bi_add_assign(r4, r0)) == NULL) goto cleanup;
+        bi_destroy(r0); r0=NULL;
+
+        // no need to free p0 because it's an alias for r0
+        // no need to free p4 because we are returning it as r4 (r4 is an alias)
+        // p1, p2, p3, temp, temp2, intermediate1, and intermediate2 are already freed
+        r4->sign = bi->sign != bi2->sign;
+        return r4;
+
+cleanup:
+        if (thread[0] != NULL) CloseHandle(thread[0]);
+        if (thread[1] != NULL) CloseHandle(thread[1]);
+        if (thread[2] != NULL) CloseHandle(thread[2]);
+        if (thread[3] != NULL) CloseHandle(thread[3]);
+        if (thread[4] != NULL) CloseHandle(thread[4]);
+
         bi_destroy(r1);
         bi_destroy(r2);
         bi_destroy(r3);
@@ -1941,13 +2383,13 @@ bigint *bi_mul(const bigint *bi, const bigint *bi2)
     }
 
     if (bi_used_leafs >= BIGINT_TOOM_COOK_MIN_LEAFS && bi2_used_leafs >= BIGINT_TOOM_COOK_MIN_LEAFS)
-#ifdef BIGINT_ENABLE_PTHREADS
+#if defined(BIGINT_ENABLE_PTHREADS) || defined(BIGINT_ENABLE_WINTHREADS)
         result = bi_toom_cook_mul(bi, bi2, bi_used_leafs, bi2_used_leafs, 1);
 #else
         result = bi_toom_cook_mul(bi, bi2, bi_used_leafs, bi2_used_leafs);
 #endif
     else if (bi_used_leafs >= BIGINT_KARATSUBA_MIN_LEAFS && bi2_used_leafs >= BIGINT_KARATSUBA_MIN_LEAFS)
-#ifdef BIGINT_ENABLE_PTHREADS
+#if defined(BIGINT_ENABLE_PTHREADS) || defined(BIGINT_ENABLE_WINTHREADS)
         result = bi_karatsuba_mul(bi, bi2, bi_used_leafs, bi2_used_leafs, 1);
 #else
         result = bi_karatsuba_mul(bi, bi2, bi_used_leafs, bi2_used_leafs);
@@ -2122,50 +2564,17 @@ static bigint *bi_square_internal(const bigint *bi, size_t used_leafs)
     return result;
 }
 
-static bigint *bi_karatsuba_square(const bigint *bi, size_t bi_used_leafs);
-static bigint *bi_toom_cook_square(const bigint *bi, size_t bi_used_leafs);
-
-/* multiplies bi by itself and returns the result in a new bigint */
-/* returns NULL on out of memory condition; the parameters are not destroyed */
-bigint *bi_square(const bigint *bi)
-{
-    bigint *result;
-    size_t bi_used_leafs = bi_used(bi);
-
-    if (bi_used_leafs == 0) return bi_new();
-    else if (bi_used_leafs == 1)
-    {
-        result = bi_mul_immediateu(bi, bi->data[0]);
-        if (result != NULL) result->sign = 0;
-        return result;
-    }
-
-    if (bi_used_leafs >= BIGINT_TOOM_COOK_MIN_LEAFS)
-    {
-        bigint b = *bi;
-        b.sign = 0;
-
-        result = bi_toom_cook_square(&b, bi_used_leafs);
-    }
-    else if (bi_used_leafs >= BIGINT_KARATSUBA_MIN_LEAFS)
-    {
-        bigint b = *bi;
-        b.sign = 0;
-
-        result = bi_karatsuba_square(&b, bi_used_leafs);
-    }
-    else
-        result = bi_square_internal(bi, bi_used_leafs);
-
-    if (result == NULL) return NULL;
-    result->sign = 0;
-    return result;
-}
-
 /* squares bi using Karatsuba multiplication, reverting to standard multiplication with small enough chunks */
 /* returns NULL on out of memory condition; the parameters are not destroyed */
+#if defined(BIGINT_ENABLE_PTHREADS) || defined(BIGINT_ENABLE_WINTHREADS)
+static bigint *bi_karatsuba_square(const bigint *bi, size_t bi_used_leafs, int use_threads)
+#else
 static bigint *bi_karatsuba_square(const bigint *bi, size_t bi_used_leafs)
+#endif
 {
+#ifdef BIGINT_ENABLE_WINTHREADS
+    HANDLE thread[3] = {NULL, NULL, NULL};
+#endif
     if (bi_used_leafs < BIGINT_KARATSUBA_MIN_LEAFS)
         return bi_square_internal(bi, bi_used_leafs);
     else
@@ -2178,6 +2587,126 @@ static bigint *bi_karatsuba_square(const bigint *bi, size_t bi_used_leafs)
         high.data += m;
         high.size = bi_used_leafs - m;
 
+#ifdef BIGINT_ENABLE_PTHREADS
+        if (use_threads)
+        {
+            void *vz0, *vz1, *vz2;
+            pthread_t low_thread, mid_thread, high_thread;
+            struct bigint_pthread_metadata low_data, mid_data, high_data;
+
+            low_data.op1 = &low;
+            low_data.used1 = bi_used(&low);
+
+            temp = bi_add(&low, &high);
+            if (temp == NULL) goto cleanup;
+
+            mid_data.op1 = temp;
+            mid_data.used1 = bi_used(temp);
+
+            high_data.op1 = &high;
+            high_data.used1 = bi_used(&high);
+
+            if (pthread_create(&low_thread, NULL, bi_karatsuba_pthread_square, &low_data)) goto cleanup;
+            if (pthread_create(&mid_thread, NULL, bi_karatsuba_pthread_square, &mid_data)) goto cleanup;
+            if (pthread_create(&high_thread, NULL, bi_karatsuba_pthread_square, &high_data)) goto cleanup;
+
+            if (pthread_join(low_thread, &vz0)) goto cleanup;
+            z0 = vz0;
+            if (z0 == NULL) goto cleanup;
+
+            if (pthread_join(mid_thread, &vz1)) goto cleanup;
+            z1 = vz1;
+            if (z1 == NULL) goto cleanup;
+
+            if (pthread_join(high_thread, &vz2)) goto cleanup;
+            z2 = vz2;
+            if (z2 == NULL) goto cleanup;
+
+            if (temp != &low) bi_destroy(temp); temp=NULL;
+        }
+        else
+        {
+            z0 = bi_karatsuba_square(&low, bi_used(&low), 0);
+            if (z0 == NULL) goto cleanup;
+            /* calculate z1 = (low1 + high1) * (low2 + high2) */
+            temp = bi_add(&low, &high);
+            if (temp == NULL) goto cleanup;
+            z1 = bi_karatsuba_square(temp, bi_used(temp), 0);
+            if (z1 == NULL) goto cleanup;
+            if (temp != &low) bi_destroy(temp); temp=NULL;
+            /* calculate z2 = high1 * high2 */
+            z2 = bi_karatsuba_square(&high, bi_used(&high), 0);
+            if (z2 == NULL) goto cleanup;
+        }
+        /* calculate z1 = z1 - z2 - z0 */
+        bi_fast_sub_assign(z1, z2);
+        if (z0 != NULL) bi_fast_sub_assign(z1, z0);
+        /* calculate z2 = z2 * 2^(2*m) + z1 * 2^m + z0 */
+        if ((z2 = bi_shl_leaf_assign(z2, m)) == NULL) goto cleanup;
+        if ((z2 = bi_add_assign(z2, z1)) == NULL) goto cleanup;
+        bi_destroy(z1); z1=NULL;
+        if ((z2 = bi_shl_leaf_assign(z2, m)) == NULL) goto cleanup;
+        if (z0 != NULL && (z2 = bi_add_assign(z2, z0)) == NULL) goto cleanup;
+        bi_destroy(z0);
+#elif defined(BIGINT_ENABLE_WINTHREADS)
+        if (use_threads)
+        {
+            struct bigint_winthread_metadata low_data, mid_data, high_data;
+
+            low_data.op1 = &low;
+            low_data.used1 = bi_used(&low);
+
+            temp = bi_add(&low, &high);
+            if (temp == NULL) goto cleanup;
+
+            mid_data.op1 = temp;
+            mid_data.used1 = bi_used(temp);
+
+            high_data.op1 = &high;
+            high_data.used1 = bi_used(&high);
+
+            if ((thread[0] = CreateThread(NULL, 0, bi_karatsuba_winthread_square, &low_data, 0, NULL)) == NULL ||
+                (thread[1] = CreateThread(NULL, 0, bi_karatsuba_winthread_square, &mid_data, 0, NULL)) == NULL ||
+                (thread[2] = CreateThread(NULL, 0, bi_karatsuba_winthread_square, &high_data, 0, NULL)) == NULL)
+                goto cleanup;
+
+            WaitForMultipleObjects(3, thread, TRUE, INFINITE);
+
+            CloseHandle(thread[0]);
+            CloseHandle(thread[1]);
+            CloseHandle(thread[2]);
+
+            z0 = low_data.result;
+            z1 = mid_data.result;
+            z2 = high_data.result;
+
+            if (temp != &low) bi_destroy(temp); temp=NULL;
+        }
+        else
+        {
+            z0 = bi_karatsuba_square(&low, bi_used(&low), 0);
+            if (z0 == NULL) goto cleanup;
+            /* calculate z1 = (low1 + high1) * (low2 + high2) */
+            temp = bi_add(&low, &high);
+            if (temp == NULL) goto cleanup;
+            z1 = bi_karatsuba_square(temp, bi_used(temp), 0);
+            if (z1 == NULL) goto cleanup;
+            if (temp != &low) bi_destroy(temp); temp=NULL;
+            /* calculate z2 = high1 * high2 */
+            z2 = bi_karatsuba_square(&high, bi_used(&high), 0);
+            if (z2 == NULL) goto cleanup;
+        }
+        /* calculate z1 = z1 - z2 - z0 */
+        bi_fast_sub_assign(z1, z2);
+        if (z0 != NULL) bi_fast_sub_assign(z1, z0);
+        /* calculate z2 = z2 * 2^(2*m) + z1 * 2^m + z0 */
+        if ((z2 = bi_shl_leaf_assign(z2, m)) == NULL) goto cleanup;
+        if ((z2 = bi_add_assign(z2, z1)) == NULL) goto cleanup;
+        bi_destroy(z1); z1=NULL;
+        if ((z2 = bi_shl_leaf_assign(z2, m)) == NULL) goto cleanup;
+        if (z0 != NULL && (z2 = bi_add_assign(z2, z0)) == NULL) goto cleanup;
+        bi_destroy(z0);
+#else
         /* calculate z0 = low * low */
         z0 = bi_karatsuba_square(&low, bi_used(&low));
         if (z0 == NULL) goto cleanup;
@@ -2200,18 +2729,462 @@ static bigint *bi_karatsuba_square(const bigint *bi, size_t bi_used_leafs)
         if ((z2 = bi_shl_leaf_assign(z2, m)) == NULL) goto cleanup;
         if ((z2 = bi_add_assign(z2, z0)) == NULL) goto cleanup;
         bi_destroy(z0);
+#endif
+
         return z2;
 cleanup:
         bi_destroy(z0);
-        bi_destroy(temp);
+        if (temp != &low) bi_destroy(temp);
         bi_destroy(z1);
         bi_destroy(z2);
+#ifdef BIGINT_ENABLE_WINTHREADS
+        if (thread[0] != NULL) CloseHandle(thread[0]);
+        if (thread[1] != NULL) CloseHandle(thread[1]);
+        if (thread[2] != NULL) CloseHandle(thread[2]);
+#endif
         return NULL;
     }
 }
 
 /* squares bi using Toom-3 multiplication, reverting to standard multiplication with small enough chunks */
 /* returns NULL on out of memory condition; the parameters are not destroyed */
+#ifdef BIGINT_ENABLE_PTHREADS
+static bigint *bi_toom_cook_square(const bigint *bi, size_t bi_used_leafs, int use_threads)
+{
+    if (bi_used_leafs < BIGINT_TOOM_COOK_MIN_LEAFS)
+        return bi_karatsuba_square(bi, bi_used_leafs, 0);
+    else
+    {
+        size_t m = bi_used_leafs / 3 + 1;
+        size_t two_m = 2 * m;
+        bigint high, mid, low;
+        bigint *p0 = NULL, *p1 = NULL, *p2 = NULL, *p3 = NULL, *p4 = NULL, *temp = NULL, *temp2 = NULL, *temp3 = NULL, *intermediate = NULL;
+        bigint *r0 = NULL, *r1 = NULL, *r2 = NULL, *r3 = NULL, *r4 = NULL;
+
+        low = mid = high = *bi;
+        low.sign = mid.sign = high.sign = 0;
+        low.size = min(m, bi_used_leafs);
+        if (bi_used_leafs > m)
+        {
+            mid.data += m;
+            mid.size = min(bi_used_leafs - m, m);
+            if (bi_used_leafs > two_m)
+            {
+                high.data += two_m;
+                high.size = bi_used_leafs - two_m;
+            }
+            else
+                high.size = 0;
+        }
+        else
+            mid.size = high.size = 0;
+
+        /* for each quadratic polynomial (hx^2 + mx + l), using points (0, 1, -1, -2, infinity):
+         *   p0 = l
+         *   p1 = h + m + l
+         *   p2 = h - m + l
+         *   p3 = 4h - 2m + l
+         *   p4 = h
+         */
+
+        /* calculate intermediate1 = h + l */
+        if (high.size)
+            intermediate = bi_add(&high, &low);
+        else
+            intermediate = &low;
+
+        if (use_threads)
+        {
+            void *vp0, *vp1, *vp2, *vp3, *vp4;
+            pthread_t p0_thread, p1_thread, p2_thread, p3_thread, p4_thread;
+            struct bigint_pthread_metadata p0_data, p1_data, p2_data, p3_data, p4_data;
+
+            // P0
+            p0_data.op1 = &low;
+            p0_data.used1 = bi_used(&low);
+
+            // P1
+            temp = bi_add(intermediate, &mid);
+            if (temp == NULL) goto cleanup;
+
+            p1_data.op1 = temp;
+            p1_data.used1 = bi_used(temp);
+
+            // P2
+            temp2 = bi_sub(intermediate, &mid);
+            if (temp2 == NULL) goto cleanup;
+
+            p2_data.op1 = temp2;
+            p2_data.used1 = bi_used(temp2);
+
+            // P3
+            temp3 = bi_copy(temp2);
+            if (temp3 == NULL) goto cleanup;
+
+            if ((temp3 = bi_add_assign(temp3, &high)) == NULL) goto cleanup;
+            if ((temp3 = bi_shl1_assign(temp3)) == NULL) goto cleanup;
+            if ((temp3 = bi_sub_assign(temp3, &low)) == NULL) goto cleanup;
+
+            p3_data.op1 = temp3;
+            p3_data.used1 = bi_used(temp3);
+
+            // P4
+            p4_data.op1 = &high;
+            p4_data.used1 = bi_used(&high);
+
+            if (pthread_create(&p0_thread, NULL, bi_toom_cook_pthread_square, &p0_data)) goto cleanup;
+            if (pthread_create(&p1_thread, NULL, bi_toom_cook_pthread_square, &p1_data)) goto cleanup;
+            if (pthread_create(&p2_thread, NULL, bi_toom_cook_pthread_square, &p2_data)) goto cleanup;
+            if (pthread_create(&p3_thread, NULL, bi_toom_cook_pthread_square, &p3_data)) goto cleanup;
+            if (pthread_create(&p4_thread, NULL, bi_toom_cook_pthread_square, &p4_data)) goto cleanup;
+
+            if (pthread_join(p0_thread, &vp0)) goto cleanup;
+            p0 = vp0;
+            if (p0 == NULL) goto cleanup;
+
+            if (pthread_join(p1_thread, &vp1)) goto cleanup;
+            p1 = vp1;
+            if (p1 == NULL) goto cleanup;
+
+            if (pthread_join(p2_thread, &vp2)) goto cleanup;
+            p2 = vp2;
+            if (p2 == NULL) goto cleanup;
+
+            if (pthread_join(p3_thread, &vp3)) goto cleanup;
+            p3 = vp3;
+            if (p3 == NULL) goto cleanup;
+
+            if (pthread_join(p4_thread, &vp4)) goto cleanup;
+            p4 = vp4;
+            if (p4 == NULL) goto cleanup;
+
+            bi_destroy(temp); temp=NULL;
+            bi_destroy(temp2); temp2=NULL;
+            bi_destroy(temp3); temp3=NULL;
+            if (intermediate != &low) bi_destroy(intermediate); intermediate=NULL;
+        }
+        else
+        {
+            /* calculate p0 = low1 * low2 */
+            p0 = bi_toom_cook_square(&low, bi_used(&low), 0);
+            if (p0 == NULL) goto cleanup;
+
+            /* calculate p1 = (low1 + mid1 + high1) * (low2 + mid2 + high2) */
+            temp = bi_add(intermediate, &mid);
+            if (temp == NULL) goto cleanup;
+
+            p1 = bi_toom_cook_square(temp, bi_used(temp), 0);
+            if (p1 == NULL) goto cleanup;
+            bi_destroy(temp); temp=NULL;
+
+            /* calculate p2 = (low1 - mid1 + high1) * (low2 - mid2 + high2) */
+            temp = bi_sub(intermediate, &mid);
+            if (temp == NULL) goto cleanup;
+
+            p2 = bi_toom_cook_square(temp, bi_used(temp), 0);
+            if (p2 == NULL) goto cleanup;
+
+            if (intermediate != &low) bi_destroy(intermediate); intermediate=NULL;
+            // Do not cleanup temp and temp2 because the next step needs them
+
+            /* calculate p3 = (low1 - 2*mid1 + 4*high1) * (low2 - 2*mid2 + 4*high2) */
+            if ((temp = bi_add_assign(temp, &high)) == NULL) goto cleanup;
+            if ((temp = bi_shl1_assign(temp)) == NULL) goto cleanup;
+            if ((temp = bi_sub_assign(temp, &low)) == NULL) goto cleanup;
+
+            p3 = bi_toom_cook_square(temp, bi_used(temp), 0);
+            if (p3 == NULL) goto cleanup;
+            bi_destroy(temp); temp=NULL;
+
+            /* calculate p4 = high1 * high2 */
+            p4 = bi_toom_cook_square(&high, bi_used(&high), 0);
+            if (p4 == NULL) goto cleanup;
+        }
+
+        /* calculate interpolation */
+        r0 = p0;
+        r4 = p4;
+
+        r3 = bi_sub(p3, p1);
+        bi_destroy(p3); p3=NULL; // p3 no longer needed
+        if (r3 == NULL) goto cleanup;
+        // TODO: speed up division by 3?
+        if ((r3 = bi_div_3_assign(r3)) == NULL) goto cleanup;
+
+        r1 = bi_sub(p1, p2);
+        if (r1 == NULL) goto cleanup;
+        (void) bi_shr_assign(r1, 1);
+        bi_destroy(p1); p1=NULL; // p1 no longer needed
+
+        r2 = bi_sub(p2, p0);
+        if (r2 == NULL) goto cleanup;
+        bi_destroy(p2); p2=NULL; // p2 no longer needed
+
+        (void) bi_negate_assign(r3);
+        if ((r3 = bi_add_assign(r3, r2)) == NULL) goto cleanup;
+        (void) bi_shr_assign(r3, 1);
+
+        temp = bi_shl1(r4);
+        if ((r3 = bi_add_assign(r3, temp)) == NULL) goto cleanup;
+        bi_destroy(temp); temp=NULL;
+
+        if ((r2 = bi_add_assign(r2, r1)) == NULL) goto cleanup;
+        if ((r2 = bi_sub_assign(r2, r4)) == NULL) goto cleanup;
+
+        if ((r1 = bi_sub_assign(r1, r3)) == NULL) goto cleanup;
+
+        if ((r4 = bi_shl_leaf_assign(r4, m)) == NULL) goto cleanup;
+        if ((r4 = bi_add_assign(r4, r3)) == NULL) goto cleanup;
+        bi_destroy(r3); r3=NULL;
+        if ((r4 = bi_shl_leaf_assign(r4, m)) == NULL) goto cleanup;
+        if ((r4 = bi_add_assign(r4, r2)) == NULL) goto cleanup;
+        bi_destroy(r2); r2=NULL;
+        if ((r4 = bi_shl_leaf_assign(r4, m)) == NULL) goto cleanup;
+        if ((r4 = bi_add_assign(r4, r1)) == NULL) goto cleanup;
+        bi_destroy(r1); r1=NULL;
+        if ((r4 = bi_shl_leaf_assign(r4, m)) == NULL) goto cleanup;
+        if ((r4 = bi_add_assign(r4, r0)) == NULL) goto cleanup;
+        bi_destroy(r0); r0=NULL;
+
+        // no need to free p0 because it's an alias for r0
+        // no need to free p4 because we are returning it as r4 (r4 is an alias)
+        // p1, p2, p3, temp, temp2, intermediate1, and intermediate2 are already freed
+        r4->sign = 0;
+        return r4;
+
+cleanup:
+        bi_destroy(r1);
+        bi_destroy(r2);
+        bi_destroy(r3);
+
+        bi_destroy(p0);
+        bi_destroy(temp);
+        bi_destroy(temp2);
+        bi_destroy(temp3);
+        if (intermediate != &low) bi_destroy(intermediate);
+        bi_destroy(p1);
+        bi_destroy(p2);
+        bi_destroy(p3);
+        bi_destroy(p4);
+        return NULL;
+    }
+}
+#elif defined(BIGINT_ENABLE_WINTHREADS)
+static bigint *bi_toom_cook_square(const bigint *bi, size_t bi_used_leafs, int use_threads)
+{
+    HANDLE thread[5] = {NULL, NULL, NULL, NULL, NULL};
+    if (bi_used_leafs < BIGINT_TOOM_COOK_MIN_LEAFS)
+        return bi_karatsuba_square(bi, bi_used_leafs, 0);
+    else
+    {
+        size_t m = bi_used_leafs / 3 + 1;
+        size_t two_m = 2 * m;
+        bigint high, mid, low;
+        bigint *p0 = NULL, *p1 = NULL, *p2 = NULL, *p3 = NULL, *p4 = NULL, *temp = NULL, *temp2 = NULL, *temp3 = NULL, *intermediate = NULL;
+        bigint *r0 = NULL, *r1 = NULL, *r2 = NULL, *r3 = NULL, *r4 = NULL;
+
+        low = mid = high = *bi;
+        low.sign = mid.sign = high.sign = 0;
+        low.size = min(m, bi_used_leafs);
+        if (bi_used_leafs > m)
+        {
+            mid.data += m;
+            mid.size = min(bi_used_leafs - m, m);
+            if (bi_used_leafs > two_m)
+            {
+                high.data += two_m;
+                high.size = bi_used_leafs - two_m;
+            }
+            else
+                high.size = 0;
+        }
+        else
+            mid.size = high.size = 0;
+
+        /* for each quadratic polynomial (hx^2 + mx + l), using points (0, 1, -1, -2, infinity):
+         *   p0 = l
+         *   p1 = h + m + l
+         *   p2 = h - m + l
+         *   p3 = 4h - 2m + l
+         *   p4 = h
+         */
+
+        /* calculate intermediate1 = h + l */
+        if (high.size)
+            intermediate = bi_add(&high, &low);
+        else
+            intermediate = &low;
+
+        if (use_threads)
+        {
+            struct bigint_winthread_metadata p0_data, p1_data, p2_data, p3_data, p4_data;
+
+            // P0
+            p0_data.op1 = &low;
+            p0_data.used1 = bi_used(&low);
+
+            // P1
+            temp = bi_add(intermediate, &mid);
+            if (temp == NULL) goto cleanup;
+
+            p1_data.op1 = temp;
+            p1_data.used1 = bi_used(temp);
+
+            // P2
+            temp2 = bi_sub(intermediate, &mid);
+            if (temp2 == NULL) goto cleanup;
+
+            p2_data.op1 = temp2;
+            p2_data.used1 = bi_used(temp2);
+
+            // P3
+            temp3 = bi_copy(temp2);
+            if (temp3 == NULL) goto cleanup;
+
+            if ((temp3 = bi_add_assign(temp3, &high)) == NULL) goto cleanup;
+            if ((temp3 = bi_shl1_assign(temp3)) == NULL) goto cleanup;
+            if ((temp3 = bi_sub_assign(temp3, &low)) == NULL) goto cleanup;
+
+            p3_data.op1 = temp3;
+            p3_data.used1 = bi_used(temp3);
+
+            // P4
+            p4_data.op1 = &high;
+            p4_data.used1 = bi_used(&high);
+
+            if ((thread[0] = CreateThread(NULL, 0, bi_toom_cook_winthread_square, &p0_data, 0, NULL)) == NULL ||
+                (thread[1] = CreateThread(NULL, 0, bi_toom_cook_winthread_square, &p1_data, 0, NULL)) == NULL ||
+                (thread[2] = CreateThread(NULL, 0, bi_toom_cook_winthread_square, &p2_data, 0, NULL)) == NULL ||
+                (thread[3] = CreateThread(NULL, 0, bi_toom_cook_winthread_square, &p3_data, 0, NULL)) == NULL ||
+                (thread[4] = CreateThread(NULL, 0, bi_toom_cook_winthread_square, &p4_data, 0, NULL)) == NULL)
+                goto cleanup;
+
+            WaitForMultipleObjects(5, thread, TRUE, INFINITE);
+
+            CloseHandle(thread[0]);
+            CloseHandle(thread[1]);
+            CloseHandle(thread[2]);
+            CloseHandle(thread[3]);
+            CloseHandle(thread[4]);
+
+            p0 = p0_data.result;
+            p1 = p1_data.result;
+            p2 = p2_data.result;
+            p3 = p3_data.result;
+            p4 = p4_data.result;
+
+            bi_destroy(temp); temp=NULL;
+            bi_destroy(temp2); temp2=NULL;
+            bi_destroy(temp3); temp3=NULL;
+            if (intermediate != &low) bi_destroy(intermediate); intermediate=NULL;
+        }
+        else
+        {
+            /* calculate p0 = low1 * low2 */
+            p0 = bi_toom_cook_square(&low, bi_used(&low), 0);
+            if (p0 == NULL) goto cleanup;
+
+            /* calculate p1 = (low1 + mid1 + high1) * (low2 + mid2 + high2) */
+            temp = bi_add(intermediate, &mid);
+            if (temp == NULL) goto cleanup;
+
+            p1 = bi_toom_cook_square(temp, bi_used(temp), 0);
+            if (p1 == NULL) goto cleanup;
+            bi_destroy(temp); temp=NULL;
+
+            /* calculate p2 = (low1 - mid1 + high1) * (low2 - mid2 + high2) */
+            temp = bi_sub(intermediate, &mid);
+            if (temp == NULL) goto cleanup;
+
+            p2 = bi_toom_cook_square(temp, bi_used(temp), 0);
+            if (p2 == NULL) goto cleanup;
+
+            if (intermediate != &low) bi_destroy(intermediate); intermediate=NULL;
+            // Do not cleanup temp because the next step needs it
+
+            /* calculate p3 = (low1 - 2*mid1 + 4*high1) * (low2 - 2*mid2 + 4*high2) */
+            if ((temp = bi_add_assign(temp, &high)) == NULL) goto cleanup;
+            if ((temp = bi_shl1_assign(temp)) == NULL) goto cleanup;
+            if ((temp = bi_sub_assign(temp, &low)) == NULL) goto cleanup;
+
+            p3 = bi_toom_cook_square(temp, bi_used(temp), 0);
+            if (p3 == NULL) goto cleanup;
+            bi_destroy(temp); temp=NULL;
+
+            /* calculate p4 = high1 * high2 */
+            p4 = bi_toom_cook_square(&high, bi_used(&high), 0);
+            if (p4 == NULL) goto cleanup;
+        }
+
+        /* calculate interpolation */
+        r0 = p0;
+        r4 = p4;
+
+        r3 = bi_sub(p3, p1);
+        bi_destroy(p3); p3=NULL; // p3 no longer needed
+        if (r3 == NULL) goto cleanup;
+        // TODO: speed up division by 3?
+        if ((r3 = bi_div_3_assign(r3)) == NULL) goto cleanup;
+
+        r1 = bi_sub(p1, p2);
+        if (r1 == NULL) goto cleanup;
+        (void) bi_shr_assign(r1, 1);
+        bi_destroy(p1); p1=NULL; // p1 no longer needed
+
+        r2 = bi_sub(p2, p0);
+        if (r2 == NULL) goto cleanup;
+        bi_destroy(p2); p2=NULL; // p2 no longer needed
+
+        (void) bi_negate_assign(r3);
+        if ((r3 = bi_add_assign(r3, r2)) == NULL) goto cleanup;
+        (void) bi_shr_assign(r3, 1);
+
+        temp = bi_shl1(r4);
+        if ((r3 = bi_add_assign(r3, temp)) == NULL) goto cleanup;
+        bi_destroy(temp); temp=NULL;
+
+        if ((r2 = bi_add_assign(r2, r1)) == NULL) goto cleanup;
+        if ((r2 = bi_sub_assign(r2, r4)) == NULL) goto cleanup;
+
+        if ((r1 = bi_sub_assign(r1, r3)) == NULL) goto cleanup;
+
+        if ((r4 = bi_shl_leaf_assign(r4, m)) == NULL) goto cleanup;
+        if ((r4 = bi_add_assign(r4, r3)) == NULL) goto cleanup;
+        bi_destroy(r3); r3=NULL;
+        if ((r4 = bi_shl_leaf_assign(r4, m)) == NULL) goto cleanup;
+        if ((r4 = bi_add_assign(r4, r2)) == NULL) goto cleanup;
+        bi_destroy(r2); r2=NULL;
+        if ((r4 = bi_shl_leaf_assign(r4, m)) == NULL) goto cleanup;
+        if ((r4 = bi_add_assign(r4, r1)) == NULL) goto cleanup;
+        bi_destroy(r1); r1=NULL;
+        if ((r4 = bi_shl_leaf_assign(r4, m)) == NULL) goto cleanup;
+        if ((r4 = bi_add_assign(r4, r0)) == NULL) goto cleanup;
+        bi_destroy(r0); r0=NULL;
+
+        // no need to free p0 because it's an alias for r0
+        // no need to free p4 because we are returning it as r4 (r4 is an alias)
+        // p1, p2, p3, temp, temp2, intermediate1, and intermediate2 are already freed
+        r4->sign = 0;
+        return r4;
+
+cleanup:
+        bi_destroy(r1);
+        bi_destroy(r2);
+        bi_destroy(r3);
+
+        bi_destroy(p0);
+        bi_destroy(temp);
+        bi_destroy(temp2);
+        bi_destroy(temp3);
+        if (intermediate != &low) bi_destroy(intermediate);
+        bi_destroy(p1);
+        bi_destroy(p2);
+        bi_destroy(p3);
+        bi_destroy(p4);
+        return NULL;
+    }
+}
+#else
 static bigint *bi_toom_cook_square(const bigint *bi, size_t bi_used_leafs)
 {
     if (bi_used_leafs < BIGINT_TOOM_COOK_MIN_LEAFS)
@@ -2357,6 +3330,52 @@ cleanup:
         return NULL;
     }
 }
+#endif
+
+/* multiplies bi by itself and returns the result in a new bigint */
+/* returns NULL on out of memory condition; the parameters are not destroyed */
+bigint *bi_square(const bigint *bi)
+{
+    bigint *result;
+    size_t bi_used_leafs = bi_used(bi);
+
+    if (bi_used_leafs == 0) return bi_new();
+    else if (bi_used_leafs == 1)
+    {
+        result = bi_mul_immediateu(bi, bi->data[0]);
+        if (result != NULL) result->sign = 0;
+        return result;
+    }
+
+    if (bi_used_leafs >= BIGINT_TOOM_COOK_MIN_LEAFS)
+    {
+        bigint b = *bi;
+        b.sign = 0;
+
+#if defined(BIGINT_ENABLE_PTHREADS) || defined(BIGINT_ENABLE_WINTHREADS)
+        result = bi_toom_cook_square(&b, bi_used_leafs, 1);
+#else
+        result = bi_toom_cook_square(&b, bi_used_leafs);
+#endif
+    }
+    else if (bi_used_leafs >= BIGINT_KARATSUBA_MIN_LEAFS)
+    {
+        bigint b = *bi;
+        b.sign = 0;
+
+#if defined(BIGINT_ENABLE_PTHREADS) || defined(BIGINT_ENABLE_WINTHREADS)
+        result = bi_karatsuba_square(&b, bi_used_leafs, 1);
+#else
+        result = bi_karatsuba_square(&b, bi_used_leafs);
+#endif
+    }
+    else
+        result = bi_square_internal(bi, bi_used_leafs);
+
+    if (result == NULL) return NULL;
+    result->sign = 0;
+    return result;
+}
 
 /* TODO: can we multiply in place? */
 /* multiplies bi by itself and assigns the product to bi, returns bi */
@@ -2479,7 +3498,6 @@ bigint *bi_fibonacci(bi_uintmax n)
     {
         if (n & 1)
         {
-            // TODO: complete the algorithm
             if ((temp = bi_mul(a, q)) == NULL ||
                 (temp2 = bi_mul(b, q)) == NULL ||
                 (a = bi_mul_assign(a, p)) == NULL ||
