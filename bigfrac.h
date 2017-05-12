@@ -127,6 +127,17 @@ public:
         return *this;
     }
 
+    Bigfrac &operator=(const Bigint &other)
+    {
+        if ((d->n = bi_copy_to(d->n, other.d)) == NULL ||
+            (d->d = bi_assignu(d->d, 1)) == NULL)
+        {
+            bf_destroy(d); d=NULL;
+            throw out_of_memory();
+        }
+        return *this;
+    }
+
     Bigfrac &operator=(bi_intmax n)
     {
         if ((d = bf_assignl(d, n)) == NULL) throw out_of_memory();
@@ -301,9 +312,9 @@ public:
         if ((d = bf_mul_assign(d, other.d)) == NULL) throw out_of_memory();
         return *this;
     }
-    Bigfrac multiplied(const Bigfrac &other) const {return Bigfrac(*this).multiplyBy(other);}
+    Bigfrac multipliedBy(const Bigfrac &other) const {return Bigfrac(*this).multiplyBy(other);}
     Bigfrac &operator*=(const Bigfrac &other) {return multiplyBy(other);}
-    friend Bigfrac operator*(const Bigfrac &lhs, const Bigfrac &rhs) {return lhs.multiplied(rhs);}
+    friend Bigfrac operator*(const Bigfrac &lhs, const Bigfrac &rhs) {return lhs.multipliedBy(rhs);}
 
     Bigfrac &square()
     {

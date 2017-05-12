@@ -3725,7 +3725,6 @@ bigint *bi_large_exp_mod(const bigint *bi, const bigint *n, const bigint *mod)
     return bi_large_exp_mod_assign(result, n, mod);
 }
 
-// TODO: not yet implemented
 /* raises bi to the nth power and assigns the result (using modulo `mod`) to bi, returns bi */
 /* returns NULL and destroys bi on out of memory condition */
 bigint *bi_large_exp_mod_assign(bigint *bi, const bigint *n, const bigint *mod)
