@@ -98,7 +98,7 @@ typedef intmax_t bi_intmax;
 #define BIGINT_ENABLE_WINTHREADS
 #endif
 
-#if defined(BIGINT_ENABLE_WINTHREADS) && defined(BIGINT_ENABLE_PTHREADS)
+#if defined(BIGINT_ENABLE_WINTHREADS)
 #undef BIGINT_ENABLE_PTHREADS
 #endif
 
