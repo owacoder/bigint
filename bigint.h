@@ -94,8 +94,12 @@ typedef intmax_t bi_intmax;
 #define BIGINT_ENABLE_PTHREADS
 #endif
 
-#if (defined(_WIN32) || defined(_WIN64)) && !defined(BIGINT_DISABLE_WINTHREADS) && !defined(BIGINT_ENABLE_PTHREADS)
+#if (defined(_WIN32) || defined(_WIN64)) && !defined(BIGINT_DISABLE_WINTHREADS)
 #define BIGINT_ENABLE_WINTHREADS
+#endif
+
+#if defined(BIGINT_ENABLE_WINTHREADS) && defined(BIGINT_ENABLE_PTHREADS)
+#undef BIGINT_ENABLE_PTHREADS
 #endif
 
 #if !defined(BIGINT_DISABLE_LIBMATH)
