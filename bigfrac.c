@@ -1,5 +1,6 @@
 #include "bigfrac.h"
 #include "general.h"
+#include "io.h"
 
 #include <stdlib.h>
 #include <memory.h>
@@ -28,46 +29,6 @@ cleanup:
         free(ptr);
     }
     return NULL;
-}
-
-bigfrac *bf_new_value(bi_signed_leaf value)
-{
-    return bf_new_frac_init(bi_new_value(value), bi_new_valueu(1));
-}
-
-bigfrac *bf_new_valueu(bi_leaf value)
-{
-    return bf_new_frac_init(bi_new_valueu(value), bi_new_valueu(1));
-}
-
-bigfrac *bf_new_valuel(bi_intmax value)
-{
-    return bf_new_frac_init(bi_new_valuel(value), bi_new_valueu(1));
-}
-
-bigfrac *bf_new_valuelu(bi_uintmax value)
-{
-    return bf_new_frac_init(bi_new_valuelu(value), bi_new_valueu(1));
-}
-
-bigfrac *bf_new_frac_value(bi_signed_leaf numer, bi_signed_leaf denom)
-{
-    return bf_new_frac_init(bi_new_value(numer), bi_new_value(denom));
-}
-
-bigfrac *bf_new_frac_valueu(bi_leaf numer, bi_leaf denom)
-{
-    return bf_new_frac_init(bi_new_valueu(numer), bi_new_valueu(denom));
-}
-
-bigfrac *bf_new_frac_valuel(bi_intmax numer, bi_intmax denom)
-{
-    return bf_new_frac_init(bi_new_valuel(numer), bi_new_valuel(denom));
-}
-
-bigfrac *bf_new_frac_valuelu(bi_uintmax numer, bi_uintmax denom)
-{
-    return bf_new_frac_init(bi_new_valuelu(numer), bi_new_valueu(denom));
 }
 
 /* creates a new bigfrac initialized to specified values
@@ -180,15 +141,13 @@ bigfrac *bf_copy_frac_to(bigfrac *dst, const bigint *numer, const bigint *denom)
  * returns NULL and destroys dst and parameters on out of memory */
 bigfrac *bf_copy_frac_init_to(bigfrac *dst, bigint *numer, bigint *denom)
 {
-    if (numer == NULL || denom == NULL)
+    if (dst->n != numer) {bi_destroy(dst->n); dst->n = numer;}
+    if (dst->d != denom) {bi_destroy(dst->d); dst->d = denom;}
+    if (dst->n == NULL || dst->d == NULL)
     {
-        bi_destroy(numer); dst->n=NULL;
-        bi_destroy(denom); dst->d=NULL;
         bf_destroy(dst);
         return NULL;
     }
-    if (dst->n != numer) {bi_destroy(dst->n); dst->n = numer;}
-    if (dst->d != denom) {bi_destroy(dst->d); dst->d = denom;}
     return dst;
 }
 
@@ -220,94 +179,6 @@ bigfrac *bf_clear(bigfrac *bf)
 {
     bi_clear(bf->n);
     bi_clear(bf->d);
-    return bf;
-}
-
-bigfrac *bf_assign(bigfrac *bf, bi_signed_leaf value)
-{
-    if ((bf->n = bi_assign(bf->n, value)) == NULL ||
-        (bf->d = bi_assignu(bf->d, 1)) == NULL)
-    {
-        bf_destroy(bf);
-        return NULL;
-    }
-    return bf;
-}
-
-bigfrac *bf_assignu(bigfrac *bf, bi_leaf value)
-{
-    if ((bf->n = bi_assignu(bf->n, value)) == NULL ||
-        (bf->d = bi_assignu(bf->d, 1)) == NULL)
-    {
-        bf_destroy(bf);
-        return NULL;
-    }
-    return bf;
-}
-
-bigfrac *bf_assignl(bigfrac *bf, bi_intmax value)
-{
-    if ((bf->n = bi_assignl(bf->n, value)) == NULL ||
-        (bf->d = bi_assignu(bf->d, 1)) == NULL)
-    {
-        bf_destroy(bf);
-        return NULL;
-    }
-    return bf;
-}
-
-bigfrac *bf_assignlu(bigfrac *bf, bi_uintmax value)
-{
-    if ((bf->n = bi_assignlu(bf->n, value)) == NULL ||
-        (bf->d = bi_assignu(bf->d, 1)) == NULL)
-    {
-        bf_destroy(bf);
-        return NULL;
-    }
-    return bf;
-}
-
-bigfrac *bf_frac_assign(bigfrac *bf, bi_signed_leaf numer, bi_signed_leaf denom)
-{
-    if ((bf->n = bi_assign(bf->n, numer)) == NULL ||
-        (bf->d = bi_assign(bf->d, denom)) == NULL)
-    {
-        bf_destroy(bf);
-        return NULL;
-    }
-    return bf;
-}
-
-bigfrac *bf_frac_assignu(bigfrac *bf, bi_leaf numer, bi_leaf denom)
-{
-    if ((bf->n = bi_assignu(bf->n, numer)) == NULL ||
-        (bf->d = bi_assignu(bf->d, denom)) == NULL)
-    {
-        bf_destroy(bf);
-        return NULL;
-    }
-    return bf;
-}
-
-bigfrac *bf_frac_assignl(bigfrac *bf, bi_intmax numer, bi_intmax denom)
-{
-    if ((bf->n = bi_assignl(bf->n, numer)) == NULL ||
-        (bf->d = bi_assignl(bf->d, denom)) == NULL)
-    {
-        bf_destroy(bf);
-        return NULL;
-    }
-    return bf;
-}
-
-bigfrac *bf_frac_assignlu(bigfrac *bf, bi_uintmax numer, bi_uintmax denom)
-{
-    if ((bf->n = bi_assignlu(bf->n, numer)) == NULL ||
-        (bf->d = bi_assignlu(bf->d, denom)) == NULL)
-    {
-        bf_destroy(bf);
-        return NULL;
-    }
     return bf;
 }
 
@@ -356,22 +227,6 @@ int bf_cmp(const bigfrac *bf, const bigfrac *bf2)
     return r;
 }
 
-/* returns -1 if bf < 0, 0 if bf == 0, 1 if bf > 0 */
-int bf_cmp_zero(const bigfrac *bf)
-{
-    if (bf_is_negative(bf))
-        return -1;
-    else if (bf_is_zero(bf))
-        return 0;
-    else
-        return 1;
-}
-
-int bf_is_negative(const bigfrac *bf)
-{
-    return bi_is_negative(bf->n) != bi_is_negative(bf->d);
-}
-
 int bf_is_one(const bigfrac *bf)
 {
     return bi_cmp(bf->n, bf->d) == 0 && !bi_is_zero(bf->d);
@@ -385,11 +240,6 @@ int bf_is_zero(const bigfrac *bf)
 int bf_is_undefined(const bigfrac *bf)
 {
     return bi_is_zero(bf->d);
-}
-
-int bf_is_power_of_2(const bigfrac *bf)
-{
-    return bi_is_power_of_2(bf->n) && bi_is_power_of_2(bf->d);
 }
 
 bigfrac *bf_negate(const bigfrac *bf)
@@ -559,28 +409,6 @@ bigfrac *bf_mul_immediate_assign(bigfrac *bf, bi_signed_leaf val)
     return bf_copy_frac_init_to(bf, bi_mul_immediate_assign(bf->n, val), bf->d);
 }
 
-bigfrac *bf_square(const bigfrac *bf)
-{
-    return bf_new_frac_init(bi_square(bf->n), bi_square(bf->d));
-}
-
-bigfrac *bf_square_assign(bigfrac *bf)
-{
-    return bf_copy_frac_init_to(bf, bi_square_assign(bf->n), bi_square_assign(bf->d));
-}
-
-bigfrac *bf_sqrt(const bigfrac *bf)
-{
-    return bf_new_frac_init(bi_sqrt(bf->n), bi_sqrt(bf->d));
-}
-
-bigfrac *bf_sqrt_assign(bigfrac *bf)
-{
-    if ((bf = bf_reduce(bf)) == NULL)
-        return NULL;
-    return bf_copy_frac_init_to(bf, bi_sqrt_assign(bf->n), bi_sqrt_assign(bf->d));
-}
-
 bigfrac *bf_div(const bigfrac *bf, const bigfrac *bf2)
 {
     return bf_new_frac_init(bi_mul(bf->n, bf2->d), bi_mul(bf->d, bf2->n));
@@ -669,44 +497,8 @@ int bf_sscan(const char *s, bigfrac *bf, size_t base)
         }
         ++n2; // add length of '/' character
     }
-    else if ((bf->d = bi_assign(bf->d, 1)) == NULL)
-    {
-        bf_destroy(bf);
-        return -1;
-    }
-
-    return n + n2;
-}
-
-int bf_sscan_n(const char *s, size_t len, bigfrac *bf, size_t base)
-{
-    int n = bi_sscan_n(s, len, bf->n, base), n2 = 0;
-
-    if (n < 0)
-    {
-        bf->n = NULL;
-        bf_destroy(bf);
-        return n;
-    }
-    len -= n;
-
-    if (len > 0 && s[n] == '/')
-    {
-        s += n + 1;
-        n2 = bi_sscan_n(s, --len, bf->d, base);
-        if (n2 < 0)
-        {
-            bf->d = NULL;
-            bf_destroy(bf);
-            return n2;
-        }
-        ++n2; // add length of '/' character
-    }
-    else if ((bf->d = bi_assign(bf->d, 1)) == NULL)
-    {
-        bf_destroy(bf);
-        return -1;
-    }
+    else
+        bi_assign(bf->d, 1);
 
     return n + n2;
 }

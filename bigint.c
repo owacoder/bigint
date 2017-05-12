@@ -1,5 +1,6 @@
 #include "bigint.h"
 #include "general.h"
+#include "io.h"
 
 #include <stdlib.h>
 #include <memory.h>
@@ -263,8 +264,6 @@ bigint *bi_clear(bigint *bi)
 bigint *bi_assignu(bigint *bi, bi_leaf value)
 {
     bi_clear(bi);
-    if (bi->size == 0)
-        return NULL;
     bi->data[0] = value;
     return bi;
 }
@@ -280,8 +279,7 @@ bigint *bi_assign(bigint *bi, bi_signed_leaf value)
         uvalue = (bi_leaf) 1 << (sizeof(value)*CHAR_BIT - 1);
     else
         uvalue = (bi_leaf) -value;
-    if (bi_assignu(bi, uvalue) == NULL)
-        return NULL;
+    bi_assignu(bi, uvalue);
     bi->sign = value < 0;
     return bi;
 }
@@ -299,8 +297,7 @@ bigint *bi_assignl(bigint *bi, bi_intmax value)
     else
         uvalue = -value;
 
-    if (bi_assignlu(bi, uvalue) == NULL)
-        return NULL;
+    bi_assignlu(bi, uvalue);
     bi->sign = value < 0;
     return bi;
 }
@@ -3725,6 +3722,7 @@ bigint *bi_large_exp_mod(const bigint *bi, const bigint *n, const bigint *mod)
     return bi_large_exp_mod_assign(result, n, mod);
 }
 
+// TODO: not yet implemented
 /* raises bi to the nth power and assigns the result (using modulo `mod`) to bi, returns bi */
 /* returns NULL and destroys bi on out of memory condition */
 bigint *bi_large_exp_mod_assign(bigint *bi, const bigint *n, const bigint *mod)
@@ -4559,7 +4557,7 @@ bigint_string bi_sprint(const bigint *bi, size_t base)
     char *result = NULL;
     const char alphabet[] = "0123456789abcdefghijklmnopqrstuvwxyz";
     bigint *cpy = NULL;
-    size_t size = 100, ptr = 0, neg = 0;
+    size_t size = 100, ptr = 0;
     bi_signed_leaf r;
     char *array;
 
@@ -4567,10 +4565,7 @@ bigint_string bi_sprint(const bigint *bi, size_t base)
     if (array == NULL) goto cleanup;
 
     if (bi->sign)
-    {
         array[ptr++] = '-';
-        neg = 1;
-    }
 
     if (bi_is_zero(bi) || base < 2)
     {
@@ -4607,10 +4602,8 @@ bigint_string bi_sprint(const bigint *bi, size_t base)
         if (result == NULL)
             goto cleanup;
 
-        size = neg;
-        if (neg)
-            result[0] = array[0];
-        while (ptr > neg)
+        size = 0;
+        while (ptr > 0)
             result[size++] = array[--ptr];
         result[size] = 0;
         ptr = size;
@@ -4629,7 +4622,7 @@ void bi_print(const bigint *bi, size_t base)
 
 /* scans bi from string str, with specified base */
 /* returns -1 and destroys bi if out of memory */
-/* returns number of characters scanned otherwise */
+/* returns number of digits scanned otherwise */
 int bi_sscan(const char *str, bigint *bi, size_t base)
 {
     const char alphabet[] = "0123456789abcdefghijklmnopqrstuvwxyz";
@@ -4647,7 +4640,6 @@ int bi_sscan(const char *str, bigint *bi, size_t base)
         {
             neg = c == '-';
             c = *str++;
-            ++hasdigits;
         }
 
         if (base < 2) return 0;
@@ -4692,7 +4684,7 @@ int bi_sscan(const char *str, bigint *bi, size_t base)
 
 /* scans bi from string str, with specified base and string length */
 /* returns -1 and destroys bi if out of memory */
-/* returns number of characters scanned otherwise */
+/* returns number of digits scanned otherwise */
 int bi_sscan_n(const char *str, size_t len, bigint *bi, size_t base)
 {
     const char alphabet[] = "0123456789abcdefghijklmnopqrstuvwxyz";
@@ -4717,7 +4709,6 @@ int bi_sscan_n(const char *str, size_t len, bigint *bi, size_t base)
             neg = c == '-';
             c = *str++;
             --len;
-            ++hasdigits;
         }
 
         if (base < 2 || len == 0) return 0;
@@ -4760,7 +4751,6 @@ int bi_sscan_n(const char *str, size_t len, bigint *bi, size_t base)
 
 /* scans bi from stream f, with specified base */
 /* returns -1 and destroys bi if out of memory */
-/* returns number of characters scanned otherwise */
 int bi_fscan(FILE *f, bigint *bi, size_t base)
 {
     const char alphabet[] = "0123456789abcdefghijklmnopqrstuvwxyz";
@@ -4778,7 +4768,6 @@ int bi_fscan(FILE *f, bigint *bi, size_t base)
         {
             neg = c == '-';
             c = fgetc(f);
-            ++hasdigits;
         }
 
         if (base < 2) return 0;
