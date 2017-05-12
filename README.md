@@ -103,6 +103,6 @@ The leaf size should default to the native word size of the target platform. How
 
 The thresholds for Karatsuba and Toom-Cook multiplication can also be modified. They are set to reasonable (though arbitrary) defaults, and can be set by pre-defining `BIGINT_KARATSUBA_MIN_LEAFS` and `BIGINT_TOOM_COOK_MIN_LEAFS`, respectively.
 
-On a GCC (or MinGW) target, pthreads are enabled by default. They can be turned off by pre-defining `BIGINT_DISABLE_PTHREADS`.
+On a Windows target, Windows threads are enabled by default. This can be turned off by pre-defining `BIGINT_DISABLE_WINTHREADS`. On a GCC (or MinGW) target, pthreads are enabled by default. They can be turned off by pre-defining `BIGINT_DISABLE_PTHREADS`. Note that Windows threads take priority over pthreads, and that the two threading technologies are mutually exclusive (i.e. you can't combine the two in the same build).
 
 If on a target without floating-point math support, define `BIGINT_DISABLE_LIBMATH`. This will prevent the build from using any floating-point math, and will remove (i.e. not build) the `log10`, `log10_approx`, `logn`, and `logn_approx` functions.
