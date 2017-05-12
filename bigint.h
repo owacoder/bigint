@@ -264,6 +264,8 @@ void bi_destroy(bigint *bi);
 
 class Bigint
 {
+    friend class Bigfrac;
+
     bigint *d;
 
     Bigint(bigint *d) : d(d) {}
