@@ -1,6 +1,5 @@
 #include "bigint.h"
 #include "general.h"
-#include "io.h"
 
 #include <stdlib.h>
 #include <memory.h>
@@ -264,6 +263,8 @@ bigint *bi_clear(bigint *bi)
 bigint *bi_assignu(bigint *bi, bi_leaf value)
 {
     bi_clear(bi);
+    if (bi->size == 0)
+        return NULL;
     bi->data[0] = value;
     return bi;
 }
@@ -279,7 +280,8 @@ bigint *bi_assign(bigint *bi, bi_signed_leaf value)
         uvalue = (bi_leaf) 1 << (sizeof(value)*CHAR_BIT - 1);
     else
         uvalue = (bi_leaf) -value;
-    bi_assignu(bi, uvalue);
+    if (bi_assignu(bi, uvalue) == NULL)
+        return NULL;
     bi->sign = value < 0;
     return bi;
 }
@@ -297,7 +299,8 @@ bigint *bi_assignl(bigint *bi, bi_intmax value)
     else
         uvalue = -value;
 
-    bi_assignlu(bi, uvalue);
+    if (bi_assignlu(bi, uvalue) == NULL)
+        return NULL;
     bi->sign = value < 0;
     return bi;
 }
@@ -1204,28 +1207,11 @@ static bigint *bi_mul_internal(const bigint *bi, const bigint *bi2, size_t sz, s
     result = bi_new_sized(max(sz + sz2, BIGINT_MINLEAFS));
     if (result == NULL) return NULL;
 
-    for (i = 0; i < sz2; ++i)
-    {
-        for (j = 0; j <= i; ++j)
-        {
-            bi_dleaf a, b, save;
-
-            a = bi->data[j];
-            b = bi2->data[i - j];
-
-            save = low_carry;
-            low_carry += a * b;
-            high_carry += low_carry < save;
-        }
-
-        result->data[i] = low_carry;
-        low_carry = (low_carry >> BIGINT_LEAFBITS) | (high_carry << BIGINT_LEAFBITS);
-        high_carry >>= BIGINT_LEAFBITS;
-    }
-
     for (; i < sz + sz2; ++i)
     {
-        for (j = i - sz2 + 1; j < sz; ++j)
+        size_t start = i < sz2? 0: i - sz2 + 1;
+        size_t end = min(i, sz-1);
+        for (j = start; j <= end; ++j)
         {
             bi_dleaf a, b, save;
 
@@ -2523,28 +2509,11 @@ static bigint *bi_square_internal(const bigint *bi, size_t used_leafs)
     result = bi_new_sized(max(sz * 2, BIGINT_MINLEAFS));
     if (result == NULL) return NULL;
 
-    for (i = 0; i < sz; ++i)
+    for (i = 0; i < sz * 2; ++i)
     {
-        for (j = 0; j <= i; ++j)
-        {
-            bi_dleaf a, b, save;
-
-            a = bi->data[j];
-            b = bi->data[i - j];
-
-            save = low_carry;
-            low_carry += a * b;
-            high_carry += low_carry < save;
-        }
-
-        result->data[i] = low_carry;
-        low_carry = (low_carry >> BIGINT_LEAFBITS) | (high_carry << BIGINT_LEAFBITS);
-        high_carry >>= BIGINT_LEAFBITS;
-    }
-
-    for (; i < sz * 2; ++i)
-    {
-        for (j = i - sz + 1; j < sz; ++j)
+        size_t start = i < sz? 0: i - sz + 1;
+        size_t end = min(i, sz-1);
+        for (j = start; j <= end; ++j)
         {
             bi_dleaf a, b, save;
 
@@ -3722,7 +3691,6 @@ bigint *bi_large_exp_mod(const bigint *bi, const bigint *n, const bigint *mod)
     return bi_large_exp_mod_assign(result, n, mod);
 }
 
-// TODO: not yet implemented
 /* raises bi to the nth power and assigns the result (using modulo `mod`) to bi, returns bi */
 /* returns NULL and destroys bi on out of memory condition */
 bigint *bi_large_exp_mod_assign(bigint *bi, const bigint *n, const bigint *mod)
@@ -4557,7 +4525,7 @@ bigint_string bi_sprint(const bigint *bi, size_t base)
     char *result = NULL;
     const char alphabet[] = "0123456789abcdefghijklmnopqrstuvwxyz";
     bigint *cpy = NULL;
-    size_t size = 100, ptr = 0;
+    size_t size = 100, ptr = 0, neg = 0;
     bi_signed_leaf r;
     char *array;
 
@@ -4565,7 +4533,10 @@ bigint_string bi_sprint(const bigint *bi, size_t base)
     if (array == NULL) goto cleanup;
 
     if (bi->sign)
+    {
         array[ptr++] = '-';
+        neg = 1;
+    }
 
     if (bi_is_zero(bi) || base < 2)
     {
@@ -4602,8 +4573,10 @@ bigint_string bi_sprint(const bigint *bi, size_t base)
         if (result == NULL)
             goto cleanup;
 
-        size = 0;
-        while (ptr > 0)
+        size = neg;
+        if (neg)
+            result[0] = array[0];
+        while (ptr > neg)
             result[size++] = array[--ptr];
         result[size] = 0;
         ptr = size;
@@ -4622,7 +4595,7 @@ void bi_print(const bigint *bi, size_t base)
 
 /* scans bi from string str, with specified base */
 /* returns -1 and destroys bi if out of memory */
-/* returns number of digits scanned otherwise */
+/* returns number of characters scanned otherwise */
 int bi_sscan(const char *str, bigint *bi, size_t base)
 {
     const char alphabet[] = "0123456789abcdefghijklmnopqrstuvwxyz";
@@ -4640,6 +4613,7 @@ int bi_sscan(const char *str, bigint *bi, size_t base)
         {
             neg = c == '-';
             c = *str++;
+            ++hasdigits;
         }
 
         if (base < 2) return 0;
@@ -4684,7 +4658,7 @@ int bi_sscan(const char *str, bigint *bi, size_t base)
 
 /* scans bi from string str, with specified base and string length */
 /* returns -1 and destroys bi if out of memory */
-/* returns number of digits scanned otherwise */
+/* returns number of characters scanned otherwise */
 int bi_sscan_n(const char *str, size_t len, bigint *bi, size_t base)
 {
     const char alphabet[] = "0123456789abcdefghijklmnopqrstuvwxyz";
@@ -4709,6 +4683,7 @@ int bi_sscan_n(const char *str, size_t len, bigint *bi, size_t base)
             neg = c == '-';
             c = *str++;
             --len;
+            ++hasdigits;
         }
 
         if (base < 2 || len == 0) return 0;
@@ -4751,6 +4726,7 @@ int bi_sscan_n(const char *str, size_t len, bigint *bi, size_t base)
 
 /* scans bi from stream f, with specified base */
 /* returns -1 and destroys bi if out of memory */
+/* returns number of characters scanned otherwise */
 int bi_fscan(FILE *f, bigint *bi, size_t base)
 {
     const char alphabet[] = "0123456789abcdefghijklmnopqrstuvwxyz";
@@ -4768,6 +4744,7 @@ int bi_fscan(FILE *f, bigint *bi, size_t base)
         {
             neg = c == '-';
             c = fgetc(f);
+            ++hasdigits;
         }
 
         if (base < 2) return 0;

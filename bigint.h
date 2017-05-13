@@ -264,6 +264,8 @@ void bi_destroy(bigint *bi);
 
 class Bigint
 {
+    friend class Bigfrac;
+
     bigint *d;
 
     Bigint(bigint *d) : d(d) {}
@@ -453,9 +455,9 @@ public:
         if ((d = bi_mul_assign(d, other.d)) == NULL) throw out_of_memory();
         return *this;
     }
-    Bigint multiplied(const Bigint &other) const {return Bigint(*this).multiplyBy(other);}
+    Bigint multipliedBy(const Bigint &other) const {return Bigint(*this).multiplyBy(other);}
     Bigint &operator*=(const Bigint &other) {return multiplyBy(other);}
-    friend Bigint operator*(const Bigint &lhs, const Bigint &rhs) {return lhs.multiplied(rhs);}
+    friend Bigint operator*(const Bigint &lhs, const Bigint &rhs) {return lhs.multipliedBy(rhs);}
 
     Bigint &square()
     {
