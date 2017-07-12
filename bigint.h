@@ -147,6 +147,11 @@ bi_leaf bi_to_intu(const bigint *bi);
 bi_signed_leaf bi_to_int(const bigint *bi);
 bi_intmax bi_to_intl(const bigint *bi);
 bi_uintmax bi_to_intlu(const bigint *bi);
+#ifdef BIGINT_ENABLE_LIBMATH
+float bi_to_float(const bigint *bi);
+double bi_to_double(const bigint *bi);
+long double bi_to_doublel(const bigint *bi);
+#endif
 bigint *bi_clear(bigint *bi);
 int bi_is_negative(const bigint *bi);
 int bi_cmp_mag(const bigint *bi, const bigint *bi2);

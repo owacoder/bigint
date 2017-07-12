@@ -361,6 +361,92 @@ bi_uintmax bi_to_intlu(const bigint *bi)
     return uvalue;
 }
 
+#ifdef BIGINT_ENABLE_LIBMATH
+/* converts a bigint to a float, returning +-INFINITY if out-of-range, returns NaN if out-of-memory */
+float bi_to_float(const bigint *bi)
+{
+    float result = 0.0;
+    size_t bits = bi_bitcount(bi), scale;
+    bigint *n = NULL;
+
+    if (bits > BIGINT_LEAFS_PER_BI_INTMAX*BIGINT_LEAFBITS)
+    {
+        scale = bits - BIGINT_LEAFS_PER_BI_INTMAX*BIGINT_LEAFBITS;
+        n = bi_shr(bi, scale);
+
+        if (n == NULL)
+            return NAN;
+
+        result = bi_to_intlu(n);
+        bi_destroy(n);
+
+        result *= powf(2.0, scale);
+    }
+    else
+        result = bi_to_intlu(bi);
+
+    if (bi->sign)
+        result = -result;
+    return result;
+}
+
+/* converts a bigint to a double, returning +-INFINITY if out-of-range, returns NaN if out-of-memory */
+double bi_to_double(const bigint *bi)
+{
+    double result = 0.0;
+    size_t bits = bi_bitcount(bi), scale;
+    bigint *n = NULL;
+
+    if (bits > BIGINT_LEAFS_PER_BI_INTMAX*BIGINT_LEAFBITS)
+    {
+        scale = bits - BIGINT_LEAFS_PER_BI_INTMAX*BIGINT_LEAFBITS;
+        n = bi_shr(bi, scale);
+
+        if (n == NULL)
+            return NAN;
+
+        result = bi_to_intlu(n);
+        bi_destroy(n);
+
+        result *= pow(2.0, scale);
+    }
+    else
+        result = bi_to_intlu(bi);
+
+    if (bi->sign)
+        result = -result;
+    return result;
+}
+
+/* converts a bigint to a long double, returning +-INFINITY if out-of-range, returns NaN if out-of-memory */
+long double bi_to_doublel(const bigint *bi)
+{
+    long double result = 0.0;
+    size_t bits = bi_bitcount(bi), scale;
+    bigint *n = NULL;
+
+    if (bits > BIGINT_LEAFS_PER_BI_INTMAX*BIGINT_LEAFBITS)
+    {
+        scale = bits - BIGINT_LEAFS_PER_BI_INTMAX*BIGINT_LEAFBITS;
+        n = bi_shr(bi, scale);
+
+        if (n == NULL)
+            return NAN;
+
+        result = bi_to_intlu(n);
+        bi_destroy(n);
+
+        result *= powl(2.0, scale);
+    }
+    else
+        result = bi_to_intlu(bi);
+
+    if (bi->sign)
+        result = -result;
+    return result;
+}
+#endif
+
 /* compares two bigints. returns -1 if bi < bi2, 0 if bi == b2, 1 if bi > b2 */
 /* only compares magnitude, does not compare signs */
 int bi_cmp_mag(const bigint *bi, const bigint *bi2)
@@ -1207,7 +1293,7 @@ static bigint *bi_mul_internal(const bigint *bi, const bigint *bi2, size_t sz, s
     result = bi_new_sized(max(sz + sz2, BIGINT_MINLEAFS));
     if (result == NULL) return NULL;
 
-    for (; i < sz + sz2; ++i)
+    for (i = 0; i < sz + sz2; ++i)
     {
         size_t start = i < sz2? 0: i - sz2 + 1;
         size_t end = min(i, sz-1);
