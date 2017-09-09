@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include <limits.h>
 
+// DETECT WORD SIZES AND TYPES
+
 #ifndef BIGINT_WORD_SIZE
 #if SIZE_MAX == 0xffffffffffffffff // Assume it's a 64-bit platform
 #define BIGINT_WORD_SIZE 32
@@ -73,14 +75,16 @@ typedef intmax_t bi_intmax;
 
 // Minimum number of leaves allocated for a bigint. Must be greater than 0.
 #ifndef BIGINT_MINLEAFS
-#define BIGINT_MINLEAFS (8)
+#define BIGINT_MINLEAFS (2)
 #endif
 
 #define BIGINT_LEAFMAX ((bi_leaf) ~0ULL)
 #define BIGINT_SIGNED_LEAFMAX ((bi_signed_leaf) (BIGINT_LEAFMAX >> 1))
+#define BIGINT_SIGNED_LEAFMIN (-BIGINT_SIGNED_LEAFMAX)
 #define BIGINT_LEAFBYTES (BIGINT_LEAFSIZE*CHAR_BIT/8)
 #define BIGINT_LEAFBITS (BIGINT_LEAFSIZE*CHAR_BIT)
 #define BIGINT_LEAFS_PER_BI_INTMAX (sizeof(bi_intmax)/BIGINT_LEAFSIZE)
+#define BIGINT_BITS_PER_BI_INTMAX (BIGINT_LEAFS_PER_BI_INTMAX*BIGINT_LEAFBITS)
 
 #ifndef BIGINT_KARATSUBA_MIN_LEAFS
 #define BIGINT_KARATSUBA_MIN_LEAFS (640/BIGINT_LEAFBITS)
@@ -119,16 +123,20 @@ typedef struct
 bigint_string bis_new(char *s, size_t len);
 void bis_destroy(bigint_string s);
 
-typedef struct
+typedef struct bigint_struct
 {
-    bi_leaf *data;
+    size_t dynamic; //if non-zero, this instance was dynamically allocated and needs to be freed
     size_t size, sign; //sign: 0 = positive, 1 = negative
+    bi_leaf *data;
+    bi_leaf buffer[BIGINT_MINLEAFS];
 } bigint;
 
 bigint bi_zero();
 bigint bi_one();
 bigint bi_two();
 bigint bi_minus_one();
+bigint *bi_init(bigint *bi);
+bigint *bi_copy_init_static(bigint *bi, const bigint *src);
 bigint *bi_new();
 bigint *bi_new_valueu(bi_leaf value);
 bigint *bi_new_value(bi_signed_leaf value);
@@ -137,6 +145,7 @@ bigint *bi_new_valuel(bi_intmax value);
 bigint *bi_copy(const bigint *bi);
 bigint *bi_copy_mag_to(bigint *dst, const bigint *src);
 bigint *bi_copy_to(bigint *dst, const bigint *src);
+bigint *bi_move_init_static(bigint *dst, const bigint *src);
 bigint *bi_assignu(bigint *bi, bi_leaf value);
 bigint *bi_assign(bigint *bi, bi_signed_leaf value);
 bigint *bi_assignl(bigint *bi, bi_intmax value);
@@ -147,11 +156,26 @@ bi_leaf bi_to_intu(const bigint *bi);
 bi_signed_leaf bi_to_int(const bigint *bi);
 bi_intmax bi_to_intl(const bigint *bi);
 bi_uintmax bi_to_intlu(const bigint *bi);
+
 #ifdef BIGINT_ENABLE_LIBMATH
+#include <float.h>
+#include <math.h>
+
+typedef enum
+{
+    bi_libmath_none,
+    bi_libmath_inf,
+    bi_libmath_nan
+} bi_libmath_err;
+
+bigint *bi_assign_float(bigint *bi, float f, bi_libmath_err *err);
+bigint *bi_assign_double(bigint *bi, double f, bi_libmath_err *err);
+bigint *bi_assign_doublel(bigint *bi, long double f, bi_libmath_err *err);
 float bi_to_float(const bigint *bi);
 double bi_to_double(const bigint *bi);
 long double bi_to_doublel(const bigint *bi);
 #endif
+
 bigint *bi_clear(bigint *bi);
 int bi_is_negative(const bigint *bi);
 int bi_cmp_mag(const bigint *bi, const bigint *bi2);
@@ -201,8 +225,12 @@ bigint *bi_sub(const bigint *bi, const bigint *bi2);
 bigint *bi_sub_assign(bigint *bi, const bigint *bi2);
 bigint *bi_add_immediate(const bigint *bi, bi_signed_leaf val);
 bigint *bi_add_immediate_assign(bigint *bi, bi_signed_leaf val);
+bigint *bi_add_immediate_leaf(const bigint *bi, bi_leaf val);
+bigint *bi_add_immediate_leaf_assign(bigint *bi, bi_leaf val);
 bigint *bi_sub_immediate(const bigint *bi, bi_signed_leaf val);
 bigint *bi_sub_immediate_assign(bigint *bi, bi_signed_leaf val);
+bigint *bi_sub_immediate_leaf(const bigint *bi, bi_leaf val);
+bigint *bi_sub_immediate_leaf_assign(bigint *bi, bi_leaf val);
 bigint *bi_mul(const bigint *bi, const bigint *bi2);
 bigint *bi_mul_assign(bigint *bi, const bigint *bi2);
 bigint *bi_mul_immediateu(const bigint *bi, bi_leaf val);
@@ -220,6 +248,8 @@ bigint *bi_uexp(const bigint *bi, bi_uintmax n);
 bigint *bi_uexp_assign(bigint *bi, bi_uintmax n);
 bigint *bi_exp(const bigint *bi, bi_intmax n);
 bigint *bi_exp_assign(bigint *bi, bi_intmax n);
+bigint *bi_large_exp(const bigint *bi, const bigint *n);
+bigint *bi_large_exp_assign(bigint *bi, const bigint *n);
 bigint *bi_uexp_mod(const bigint *bi, bi_uintmax n, const bigint *mod);
 bigint *bi_uexp_mod_assign(bigint *bi, bi_uintmax n, const bigint *mod);
 bigint *bi_exp_mod(const bigint *bi, bi_intmax n, const bigint *mod);
@@ -271,157 +301,256 @@ class Bigint
 {
     friend class Bigfrac;
 
-    bigint *d;
+protected:
+    mutable bigint d;
 
-    Bigint(bigint *d) : d(d) {}
+    Bigint(bigint *b) {bi_move_init_static(&d, b); free(b);}
+    Bigint(const bigint &b) {bi_move_init_static(&d, &b);}
 
 public:
     struct error {};
     struct out_of_memory: public error {};
     struct division_by_zero: public error {};
+    struct out_of_range: public error {};
 
-    const bigint *native_handle() const {return d;}
-    bigint *&native_handle() {return d;}
+    const bigint *native_handle() const {return &d;}
+    bigint *native_handle() {return &d;}
 
-    Bigint() : d(bi_new()) {if (d == NULL) throw out_of_memory();}
-    Bigint(int n) : d(bi_new_valuel(n)) {if (d == NULL) throw out_of_memory();}
-    Bigint(bi_intmax n) : d(bi_new_valuel(n)) {if (d == NULL) throw out_of_memory();}
-    Bigint(const char *s) : d(bi_new()) {if (d == NULL || bi_sscan(s, d, 10) < 0) throw out_of_memory();}
-    Bigint(const std::string &s) : d(bi_new()) {if (d == NULL || bi_sscan_n(s.c_str(), s.size(), d, 10) < 0) throw out_of_memory();}
-    Bigint(const Bigint &other) : d(bi_copy(other.d)) {if (d == NULL) throw out_of_memory();}
+    Bigint() {bi_init(&d);}
+    template<typename T>
+    Bigint(T n) {if (bi_assignl(bi_init(&d), n) == NULL) throw out_of_memory();}
+    Bigint(bi_intmax n) {if (bi_assignl(bi_init(&d), n) == NULL) throw out_of_memory();}
+    Bigint(bi_uintmax n) {if (bi_assignlu(bi_init(&d), n) == NULL) throw out_of_memory();}
+    Bigint(const char *s) {if (bi_sscan(s, bi_init(&d), 10) < 0) throw out_of_memory();}
+    Bigint(const std::string &s) {if (bi_sscan_n(s.c_str(), s.size(), bi_init(&d), 10) < 0) throw out_of_memory();}
+    Bigint(const Bigint &other) {if (bi_copy_init_static(&d, &other.d) == NULL) throw out_of_memory();}
 #if __cplusplus >= 201103L
-    Bigint(Bigint &&other) : d(other.d) {other.d = NULL;}
+    Bigint(Bigint &&other) {bi_move_init_static(&d, &other.d); other.d.data = NULL;}
 #endif
-    ~Bigint() {bi_destroy(d);}
+    virtual ~Bigint() {bi_destroy(&d);}
 
     Bigint &operator=(const Bigint &other)
     {
-        if ((d = bi_copy_to(d, other.d)) == NULL) throw out_of_memory();
+        if ((bi_copy_to(&d, &other.d)) == NULL) {d.data = NULL; throw out_of_memory();}
+        return *this;
+    }
+
+    template<typename T>
+    Bigint &operator=(T n)
+    {
+        if ((bi_assignl(&d, n)) == NULL) {d.data = NULL; throw out_of_memory();}
         return *this;
     }
 
     Bigint &operator=(bi_intmax n)
     {
-        if ((d = bi_assignl(d, n)) == NULL) throw out_of_memory();
+        if ((bi_assignl(&d, n)) == NULL) {d.data = NULL; throw out_of_memory();}
         return *this;
     }
 
-    void clear() {bi_clear(d);}
+    Bigint &operator=(bi_uintmax n)
+    {
+        if ((bi_assignlu(&d, n)) == NULL) {d.data = NULL; throw out_of_memory();}
+        return *this;
+    }
 
-    bool isNegative() const {return bi_is_negative(d);}
-    bool isZero() const {return bi_is_zero(d);}
-    bool isOne() const {return bi_is_one(d);}
-    bool isPowerOf2() const {return bi_is_power_of_2(d);}
+    void clear() {bi_clear(&d);}
+    void release_memory() {bi_destroy(&d); bi_init(&d);}
+
+    bool isNegative() const {return bi_is_negative(&d);}
+    bool isZero() const {return bi_is_zero(&d);}
+    bool isOne() const {return bi_is_one(&d);}
+    bool isPowerOf2() const {return bi_is_power_of_2(&d);}
     // returns floor(log2(bigint)), -1 if input is zero
-    int log2() const {return bi_log2(d);}
+    int log2() const {return bi_log2(&d);}
     // returns floor(log2(bigint)), -1 if input is zero
-    long long log2l() const {return bi_log2l(d);}
+    long long log2l() const {return bi_log2l(&d);}
 #ifdef BIGINT_ENABLE_LIBMATH
+    struct floating_point_error: public error {};
+    struct floating_point_infinite: public floating_point_error {};
+    struct floating_point_nan: public floating_point_error {};
+
+    Bigint &operator=(float f)
+    {
+        bi_libmath_err err;
+
+        if ((bi_assign_float(&d, f, &err)) == NULL) {d.data = NULL; throw out_of_memory();}
+
+        if (err == bi_libmath_inf) throw floating_point_infinite();
+        else if (err == bi_libmath_nan) throw floating_point_nan();
+
+        return *this;
+    }
+
+    Bigint &operator=(double f)
+    {
+        bi_libmath_err err;
+
+        if ((bi_assign_double(&d, f, &err)) == NULL) {d.data = NULL; throw out_of_memory();}
+
+        if (err == bi_libmath_inf) throw floating_point_infinite();
+        else if (err == bi_libmath_nan) throw floating_point_nan();
+
+        return *this;
+    }
+
+    Bigint &operator=(long double f)
+    {
+        bi_libmath_err err;
+
+        if ((bi_assign_doublel(&d, f, &err)) == NULL) {d.data = NULL; throw out_of_memory();}
+
+        if (err == bi_libmath_inf) throw floating_point_infinite();
+        else if (err == bi_libmath_nan) throw floating_point_nan();
+
+        return *this;
+    }
+
+    // returns this value converted to float, returns +-INFINITY if out-of-range
+    float toFloat() const
+    {
+        float f = bi_to_float(&d);
+        if (isnan(f)) {d.data = NULL; throw out_of_memory();}
+        return f;
+    }
+    // returns this value converted to double, returns +-INFINITY if out-of-range
+    double toDouble() const
+    {
+        double f = bi_to_double(&d);
+        if (isnan(f)) {d.data = NULL; throw out_of_memory();}
+        return f;
+    }
+    // returns this value converted to long double, returns +-INFINITY if out-of-range
+    long double toLDouble() const
+    {
+        long double f = bi_to_doublel(&d);
+        if (isnan(f)) {d.data = NULL; throw out_of_memory();}
+        return f;
+    }
+    // returns this value converted to an intmax_t, undefined if out-of-range
+    intmax_t toInt() const {return bi_to_intl(&d);}
+    // returns this value (disregarding sign) converted to a uintmax_t, undefined if out-of-range
+    uintmax_t toUInt() const {return bi_to_intlu(&d);}
+    // returns this value as an intmax_t, throwing an out_of_range error if not able to be converted
+    uintmax_t toCheckedInt() const
+    {
+        if (compare(INTMAX_MIN) < 0 || compare(INTMAX_MAX) > 0)
+            throw out_of_range();
+        return bi_to_intl(&d);
+    }
+    // returns this value as a uintmax_t, throwing an out_of_range error if not able to be converted
+    uintmax_t toCheckedUInt() const
+    {
+        if (isNegative() || compare(UINTMAX_MAX) > 0)
+            throw out_of_range();
+        return bi_to_intlu(&d);
+    }
+
     // returns floor(log10(bigint)), -1 if input is zero
     int log10() const
     {
-        int r = bi_log10(d);
-        if (r < -1) throw out_of_memory();
+        int r = bi_log10(&d);
+        if (r < -1) {d.data = NULL; throw out_of_memory();}
         return r;
     }
     // returns floor(log10(bigint)), -1 if input is zero
     long long log10l() const
     {
-        long long r = bi_log10l(d);
-        if (r < -1) throw out_of_memory();
+        long long r = bi_log10l(&d);
+        if (r < -1) {d.data = NULL; throw out_of_memory();}
         return r;
     }
     // returns approximation of floor(log10(bigint)), -1 if input is zero
     // equal to floor(log10(bigint)) or floor(log10(bigint))-1
     int log10_approx() const
     {
-        int r = bi_log10_approx(d);
-        if (r < -1) throw out_of_memory();
+        int r = bi_log10_approx(&d);
+        if (r < -1) {d.data = NULL; throw out_of_memory();}
         return r;
     }
     // returns approximation of floor(log10(bigint)), -1 if input is zero
     // equal to floor(log10(bigint)) or floor(log10(bigint))-1
     long long log10l_approx() const
     {
-        long long r = bi_log10l_approx(d);
-        if (r < -1) throw out_of_memory();
+        long long r = bi_log10l_approx(&d);
+        if (r < -1) {d.data = NULL; throw out_of_memory();}
         return r;
     }
     // returns floor(logn(bigint)), -1 if input is zero
     int logn(uintmax_t n) const
     {
-        int r = bi_logn(d, n);
-        if (r < -1) throw out_of_memory();
+        int r = bi_logn(&d, n);
+        if (r < -1) {d.data = NULL; throw out_of_memory();}
         return r;
     }
     // returns floor(logn(bigint)), -1 if input is zero
     long long lognl(uintmax_t n) const
     {
-        long long r = bi_lognl(d, n);
-        if (r < -1) throw out_of_memory();
+        long long r = bi_lognl(&d, n);
+        if (r < -1) {d.data = NULL; throw out_of_memory();}
         return r;
     }
     // returns approximation of floor(logn(bigint)), -1 if input is zero
     // equal to floor(logn(bigint)) or floor(logn(bigint))-1
     int logn_approx(uintmax_t n) const
     {
-        int r = bi_logn_approx(d, n);
-        if (r < -1) throw out_of_memory();
+        int r = bi_logn_approx(&d, n);
+        if (r < -1) {d.data = NULL; throw out_of_memory();}
         return r;
     }
     // returns approximation of floor(logn(bigint)), -1 if input is zero
     // equal to floor(logn(bigint)) or floor(logn(bigint))-1
     long long lognl_approx(uintmax_t n) const
     {
-        long long r = bi_lognl_approx(d, n);
-        if (r < -1) throw out_of_memory();
+        long long r = bi_lognl_approx(&d, n);
+        if (r < -1) {d.data = NULL; throw out_of_memory();}
         return r;
     }
 #endif
     // returns -1 if input is zero
-    int trailingZeroes() const {return bi_trailing_zeroes(d);}
-    int compare(const Bigint &other) const {return bi_cmp(d, other.d);}
-    int compareAbs(const Bigint &other) const {return bi_cmp_mag(d, other.d);}
-    int signum() const {return bi_cmp_zero(d);}
+    int trailingZeroes() const {return bi_trailing_zeroes(&d);}
+    int compare(const Bigint &other) const {return bi_cmp(&d, &other.d);}
+    int compareAbs(const Bigint &other) const {return bi_cmp_mag(&d, &other.d);}
+    int signum() const {return bi_cmp_zero(&d);}
 
     Bigint operator+() const {return *this;}
 
-    Bigint &negate() {bi_negate(d); return *this;}
+    Bigint &negate() {bi_negate_assign(&d); return *this;}
     Bigint negated() const {return Bigint(*this).negate();}
     Bigint operator-() const {return Bigint(*this).negate();}
 
-    Bigint &removeSign() {bi_abs_assign(d); return *this;}
+    Bigint &removeSign() {bi_abs_assign(&d); return *this;}
     Bigint abs() const {return Bigint(*this).removeSign();}
 
     // post- operators
     Bigint operator++(int)
     {
         Bigint b(*this);
-        if ((d = bi_add_immediate_assign(d, 1)) == NULL) throw out_of_memory();
+        if ((bi_add_immediate_leaf_assign(&d, 1)) == NULL) {d.data = NULL; throw out_of_memory();}
         return b;
     }
     Bigint operator--(int)
     {
         Bigint b(*this);
-        if ((d = bi_sub_immediate_assign(d, 1)) == NULL) throw out_of_memory();
+        if ((bi_sub_immediate_leaf_assign(&d, 1)) == NULL) {d.data = NULL; throw out_of_memory();}
         return b;
     }
 
     // pre- operators
     Bigint &operator++()
     {
-        if ((d = bi_add_immediate_assign(d, 1)) == NULL) throw out_of_memory();
+        if ((bi_add_immediate_leaf_assign(&d, 1)) == NULL) {d.data = NULL; throw out_of_memory();}
         return *this;
     }
     Bigint &operator--()
     {
-        if ((d = bi_sub_immediate_assign(d, 1)) == NULL) throw out_of_memory();
+        if ((bi_sub_immediate_leaf_assign(&d, 1)) == NULL) {d.data = NULL; throw out_of_memory();}
         return *this;
     }
 
     Bigint &shiftLeft(size_t bits)
     {
-        if ((d = bi_shl_assign(d, bits)) == NULL) throw out_of_memory();
+        if ((bi_shl_assign(&d, bits)) == NULL) {d.data = NULL; throw out_of_memory();}
         return *this;
     }
     Bigint shiftedLeft(size_t bits) const {return Bigint(*this).shiftLeft(bits);}
@@ -430,7 +559,7 @@ public:
 
     Bigint &shiftRight(size_t bits)
     {
-        if ((d = bi_shr_assign(d, bits)) == NULL) throw out_of_memory();
+        if ((bi_shr_assign(&d, bits)) == NULL) {d.data = NULL; throw out_of_memory();}
         return *this;
     }
     Bigint shiftedRight(size_t bits) const {return Bigint(*this).shiftRight(bits);}
@@ -439,7 +568,7 @@ public:
 
     Bigint &add(const Bigint &other)
     {
-        if ((d = bi_add_assign(d, other.d)) == NULL) throw out_of_memory();
+        if ((bi_add_assign(&d, &other.d)) == NULL) {d.data = NULL; throw out_of_memory();}
         return *this;
     }
     Bigint added(const Bigint &other) const {return Bigint(*this).add(other);}
@@ -448,7 +577,7 @@ public:
 
     Bigint &subtract(const Bigint &other)
     {
-        if ((d = bi_sub_assign(d, other.d)) == NULL) throw out_of_memory();
+        if ((bi_sub_assign(&d, &other.d)) == NULL) {d.data = NULL; throw out_of_memory();}
         return *this;
     }
     Bigint subtracted(const Bigint &other) const {return Bigint(*this).subtract(other);}
@@ -457,7 +586,7 @@ public:
 
     Bigint &multiplyBy(const Bigint &other)
     {
-        if ((d = bi_mul_assign(d, other.d)) == NULL) throw out_of_memory();
+        if ((bi_mul_assign(&d, &other.d)) == NULL) {d.data = NULL; throw out_of_memory();}
         return *this;
     }
     Bigint multipliedBy(const Bigint &other) const {return Bigint(*this).multiplyBy(other);}
@@ -466,14 +595,14 @@ public:
 
     Bigint &square()
     {
-        if ((d = bi_square_assign(d)) == NULL) throw out_of_memory();
+        if ((bi_square_assign(&d)) == NULL) {d.data = NULL; throw out_of_memory();}
         return *this;
     }
     Bigint squared() const {return Bigint(*this).square();}
 
     Bigint &squareRoot()
     {
-        if ((d = bi_sqrt_assign(d)) == NULL) throw out_of_memory();
+        if ((bi_sqrt_assign(&d)) == NULL) {d.data = NULL; throw out_of_memory();}
         return *this;
     }
     Bigint squareRooted() const {return Bigint(*this).squareRoot();}
@@ -494,36 +623,42 @@ public:
 
     static bool isFibonacci(const Bigint &n)
     {
-        int r = bi_is_fibonacci(n.d);
+        int r = bi_is_fibonacci(&n.d);
         if (r < 0) throw out_of_memory();
         return r;
     }
 
     Bigint &powerU(bi_uintmax n)
     {
-        if ((d = bi_uexp_assign(d, n)) == NULL) throw out_of_memory();
+        if ((bi_uexp_assign(&d, n)) == NULL) {d.data = NULL; throw out_of_memory();}
         return *this;
     }
     Bigint &power(bi_intmax n)
     {
-        if ((d = bi_exp_assign(d, n)) == NULL) throw out_of_memory();
+        if ((bi_exp_assign(&d, n)) == NULL) {d.data = NULL; throw out_of_memory();}
+        return *this;
+    }
+    Bigint &power(const Bigint &n)
+    {
+        if ((bi_large_exp_assign(&d, &n.d)) == NULL) {d.data = NULL; throw out_of_memory();}
         return *this;
     }
     Bigint poweredU(bi_uintmax n) const {return Bigint(*this).power(n);}
     Bigint powered(bi_intmax n) const {return Bigint(*this).power(n);}
+    Bigint powered(const Bigint &n) const {return Bigint(*this).power(n);}
     Bigint &powerModU(bi_uintmax n, const Bigint &mod)
     {
-        if ((d = bi_uexp_mod_assign(d, n, mod.d)) == NULL) throw out_of_memory();
+        if ((bi_uexp_mod_assign(&d, n, &mod.d)) == NULL) {d.data = NULL; throw out_of_memory();}
         return *this;
     }
     Bigint &powerMod(bi_intmax n, const Bigint &mod)
     {
-        if ((d = bi_exp_mod_assign(d, n, mod.d)) == NULL) throw out_of_memory();
+        if ((bi_exp_mod_assign(&d, n, &mod.d)) == NULL) {d.data = NULL; throw out_of_memory();}
         return *this;
     }
     Bigint &powerMod(const Bigint &n, const Bigint &mod)
     {
-        if ((d = bi_large_exp_mod_assign(d, n.d, mod.d)) == NULL) throw out_of_memory();
+        if ((bi_large_exp_mod_assign(&d, &n.d, &mod.d)) == NULL) {d.data = NULL; throw out_of_memory();}
         return *this;
     }
     Bigint poweredModU(bi_uintmax n, const Bigint &mod) const {return Bigint(*this).powerModU(n, mod);}
@@ -532,8 +667,8 @@ public:
 
     Bigint &divideBy(const Bigint &other)
     {
-        if (bi_is_zero(other.d)) throw division_by_zero();
-        if ((d = bi_div_assign(d, other.d)) == NULL) throw out_of_memory();
+        if (bi_is_zero(&other.d)) throw division_by_zero();
+        if ((bi_div_assign(&d, &other.d)) == NULL) {d.data = NULL; throw out_of_memory();}
         return *this;
     }
     Bigint divided(const Bigint &other) const {return Bigint(*this).divideBy(other);}
@@ -542,8 +677,8 @@ public:
 
     Bigint &moduloBy(const Bigint &other)
     {
-        if (bi_is_zero(other.d)) throw division_by_zero();
-        if ((d = bi_mod_assign(d, other.d)) == NULL) throw out_of_memory();
+        if (bi_is_zero(&other.d)) throw division_by_zero();
+        if ((bi_mod_assign(&d, &other.d)) == NULL) {d.data = NULL; throw out_of_memory();}
         return *this;
     }
     Bigint modulo(const Bigint &other) const {return Bigint(*this).moduloBy(other);}
@@ -552,39 +687,49 @@ public:
 
     Bigint &gcdAssign(const Bigint &other)
     {
-        bigint *n = bi_gcd(d, other.d);
-        if (n == NULL) throw out_of_memory();
-        bi_swap(d, n);
+        bigint *n = bi_gcd(&d, &other.d);
+        if (n == NULL) {d.data = NULL; throw out_of_memory();}
+        bi_swap(&d, n);
         bi_destroy(n);
         return *this;
     }
     Bigint gcd(const Bigint &other) const {return Bigint(*this).gcdAssign(other);}
 
-    static Bigint fromString(const char *s, size_t base = 10)
+    static Bigint fromString(const char *s, size_t base = 10, int *charsRead = NULL)
     {
-        bigint *b = bi_new();
-        if (b == NULL ||
-            bi_sscan(s, b, base) < 0) throw out_of_memory();
+        bigint b;
+        int chars;
+        if ((chars = bi_sscan(s, bi_init(&b), base)) < 0) throw out_of_memory();
+
+        if (charsRead != NULL)
+            *charsRead = chars;
+
         return Bigint(b);
     }
 
-    static Bigint fromString(const std::string &s, size_t base = 10)
+    static Bigint fromString(const std::string &s, size_t base = 10, int *charsRead = NULL)
     {
-        bigint *b = bi_new();
-        if (b == NULL ||
-            bi_sscan_n(s.c_str(), s.size(), b, base) < 0) throw out_of_memory();
+        bigint b;
+        int chars;
+        if ((chars = bi_sscan_n(s.c_str(), s.size(), bi_init(&b), base)) < 0) throw out_of_memory();
+
+        if (charsRead != NULL)
+            *charsRead = chars;
+
         return Bigint(b);
     }
 
     std::string toString(size_t base = 10) const
     {
-        bigint_string bstr = bi_sprint(d, base);
-        if (bstr.string == NULL) throw out_of_memory();
+        bigint_string bstr = bi_sprint(&d, base);
+        if (bstr.string == NULL) {d.data = NULL; throw out_of_memory();}
 
         std::string str(bstr.string, bstr.len);
         bis_destroy(bstr);
         return str;
     }
+
+    void swap(Bigint &other) {std::swap(d, other.d);}
 
     friend bool operator<(const Bigint &lhs, const Bigint &rhs) {return lhs.compare(rhs) < 0;}
     friend bool operator>(const Bigint &lhs, const Bigint &rhs) {return lhs.compare(rhs) > 0;}
@@ -605,15 +750,17 @@ public:
                 if (s.size() >= 2 && s[0] == '0' && tolower(s[1]) == 'x')
                     s.erase(0, 2);
                 bi = fromString(s, 16);
-                return in;
+                break;
             case std::ios_base::oct:
                 bi = fromString(s, 8);
-                return in;
+                break;
             case std::ios_base::dec:
             default:
                 bi = fromString(s, 10);
-                return in;
+                break;
         }
+
+        return in;
     }
 
     friend std::ostream &operator<<(std::ostream &out, const Bigint &bi)
@@ -638,6 +785,11 @@ public:
         }
     }
 };
+
+inline void swap(Bigint &me, Bigint &other)
+{
+    me.swap(other);
+}
 
 #endif
 
