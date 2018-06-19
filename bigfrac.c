@@ -217,8 +217,8 @@ int bf_cmp(const bigfrac *bf, const bigfrac *bf2)
         return 2;
     }
 
-    a->sign = bi_is_negative(bf->d)? !bf->n->sign: bf->n->sign;
-    b->sign = bi_is_negative(bf2->d)? !bf2->n->sign: bf2->n->sign;
+    bi_set_negative(a, bi_is_negative(bf->d)? !bi_is_negative(bf->n): bi_is_negative(bf->n));
+    bi_set_negative(b, bi_is_negative(bf2->d)? !bi_is_negative(bf2->n): bi_is_negative(bf2->n));
 
     r = bi_cmp(a, b);
     bi_destroy(a);
@@ -441,8 +441,8 @@ bigfrac *bf_div_immediate_assign(bigfrac *bf, bi_signed_leaf val)
 
 bigfrac *bf_reduce(bigfrac *bf)
 {
-    bigint *gcd = NULL;
-    size_t negative = bf->n->sign != bf->d->sign;
+    bigint *gcd;
+    size_t negative = bi_is_negative(bf->n) != bi_is_negative(bf->d);
 
     if (bi_is_zero(bf->n) || bi_is_zero(bf->d))
         return bf;
@@ -463,8 +463,8 @@ bigfrac *bf_reduce(bigfrac *bf)
     if (bf->n != NULL && bf->d != NULL)
     {
         // fix sign
-        bf->n->sign = negative;
-        bf->d->sign = 0;
+        bi_set_negative(bf->n, negative);
+        bi_set_negative(bf->d, 0);
         return bf;
     }
 

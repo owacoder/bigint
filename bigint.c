@@ -37,22 +37,30 @@ void mul128(uint64_t a, uint64_t b, uint64_t *h, uint64_t *l)
     *l = a * b;
 }
 
+/* initialize a new bigint with given size to 0 and return it */
+/* returns bi, or NULL on out of memory condition */
+/* bi is NOT destroyed by this function, but will have a NULL data pointer if this function returns NULL */
+static bigint *bi_init_sized(bigint *bi, size_t size)
+{
+    bi->size = size;
+    bi->flags = BIGINT_FLAG_GROWABLE | BIGINT_FLAG_FREEABLE;
+    bi->data = calloc(size, sizeof(*bi->data));
+    if (bi->data == NULL)
+        return NULL;
+    return bi;
+}
+
 /* create a new bigint with given size initialized to 0 and return it */
 /* returns NULL on out of memory condition */
 static bigint *bi_new_sized(size_t size)
 {
-    bigint *ptr = calloc(1, sizeof(*ptr));
-    if (ptr != NULL)
+    bigint *ptr = malloc(sizeof(*ptr));
+    if (ptr == NULL || bi_init_sized(ptr, size) == NULL)
     {
-        ptr->dynamic = 1;
-        ptr->size = size;
-        ptr->data = size <= BIGINT_MINLEAFS? ptr->buffer: calloc(size, sizeof(*ptr->data));
-        if (ptr->data == NULL)
-        {
-            free(ptr);
-            return NULL;
-        }
+        free(ptr);
+        return NULL;
     }
+    ptr->flags |= BIGINT_FLAG_DESTROYABLE; // Make destroyable, which bi_init_sized() does not do
     return ptr;
 }
 
@@ -64,30 +72,34 @@ static bigint *bi_resize(bigint *bi, size_t size)
     size_t old_size;
     if (bi->size >= size) return bi;
 
-    old_size = bi->size;
-    bi->size = size;
-
-    if (bi->data == bi->buffer) /* If we haven't grown, we're still using the buffer. We need to create a new memory block and discard the buffer */
+    if (!bi_is_growable(bi))
     {
-        temp = malloc(size * sizeof(bi_leaf));
+        old_size = bi->size;
+        bi->size = size;
+        temp = calloc(size, sizeof(bi_leaf));
         if (temp == NULL)
         {
             bi_destroy(bi);
             return NULL;
         }
-        memcpy(temp, bi->buffer, old_size * sizeof(bi_leaf));
+        memcpy(temp, bi->data, old_size * sizeof(bi_leaf));
+        bi->data = temp;
+        bi->flags |= BIGINT_FLAG_GROWABLE | BIGINT_FLAG_FREEABLE;
     }
-    else /* We already are using an external memory area, just realloc */
+    else
     {
+        old_size = bi->size;
+        bi->size = size;
         temp = realloc(bi->data, size * sizeof(bi_leaf));
         if (temp == NULL)
         {
-            bi_destroy(bi);
+            free(bi->data);
+            free(bi);
             return NULL;
         }
+        bi->data = temp;
+        memset(bi->data + old_size, 0, (size-old_size) * sizeof(bi_leaf));
     }
-    bi->data = temp;
-    memset(bi->data + old_size, 0, (size-old_size) * sizeof(bi_leaf));
 
     return bi;
 }
@@ -138,35 +150,18 @@ size_t bi_used(const bigint *bi)
     return 0;
 }
 
-/* initializes a non-initialized stack-allocated bigint to the default value */
-bigint *bi_init(bigint *bi)
-{
-    memset(bi, 0, sizeof(*bi));
-    bi->size = BIGINT_MINLEAFS;
-    bi->data = bi->buffer;
-    return bi;
-}
-
-/* initializes a non-initialized stack-allocated bigint to another value */
-bigint *bi_copy_init_static(bigint *bi, const bigint *src)
-{
-    if (bi == src)
-        return bi;
-
-    if (src->data != src->buffer) // If val has extended buffer size, an allocation is needed
-        return bi_copy_to(bi_init(bi), src);
-
-    memcpy(bi, src, sizeof(*bi));
-    bi->dynamic = 0;
-    bi->data = bi->buffer;
-    return bi;
-}
-
 /* create a new bigint initialized to 0 and return it */
 /* returns NULL on out of memory condition */
 bigint *bi_new()
 {
     return bi_new_sized(BIGINT_MINLEAFS);
+}
+
+/* initialize bi (from an uninitialized state) to 0 and return it */
+/* returns bi, or returns NULL on out of memory condition */
+bigint *bi_init(bigint *bi)
+{
+    return bi_init_sized(bi, BIGINT_MINLEAFS);
 }
 
 bigint *bi_new_valueu(bi_leaf value)
@@ -177,12 +172,28 @@ bigint *bi_new_valueu(bi_leaf value)
     return b;
 }
 
+bigint *bi_init_valueu(bigint *bi, bi_leaf value)
+{
+    if (bi_init_sized(bi, BIGINT_MINLEAFS) == NULL ||
+            bi_assignu(bi, value) == NULL)
+        return NULL;
+    return bi;
+}
+
 bigint *bi_new_value(bi_signed_leaf value)
 {
     bigint *b = bi_new_sized(BIGINT_MINLEAFS);
     if (b == NULL || bi_assign(b, value) == NULL)
         return NULL;
     return b;
+}
+
+bigint *bi_init_value(bigint *bi, bi_signed_leaf value)
+{
+    if (bi_init_sized(bi, BIGINT_MINLEAFS) == NULL ||
+            bi_assign(bi, value) == NULL)
+        return NULL;
+    return bi;
 }
 
 bigint *bi_new_valuelu(bi_uintmax value)
@@ -193,12 +204,28 @@ bigint *bi_new_valuelu(bi_uintmax value)
     return b;
 }
 
+bigint *bi_init_valuelu(bigint *bi, bi_uintmax value)
+{
+    if (bi_init_sized(bi, BIGINT_MINLEAFS) == NULL ||
+            bi_assignlu(bi, value) == NULL)
+        return NULL;
+    return bi;
+}
+
 bigint *bi_new_valuel(bi_intmax value)
 {
     bigint *b = bi_new_sized(BIGINT_MINLEAFS);
     if (b == NULL || bi_assignl(b, value) == NULL)
         return NULL;
     return b;
+}
+
+bigint *bi_init_valuel(bigint *bi, bi_intmax value)
+{
+    if (bi_init_sized(bi, BIGINT_MINLEAFS) == NULL ||
+            bi_assignl(bi, value) == NULL)
+        return NULL;
+    return bi;
 }
 
 /* returns a bigint with the value 0 */
@@ -209,8 +236,7 @@ bigint bi_zero()
 
     b.data = &leaf;
     b.size = 1;
-    b.sign = 0;
-    b.dynamic = 0;
+    b.flags = 0;
     return b;
 }
 
@@ -222,8 +248,7 @@ bigint bi_one()
 
     b.data = &leaf;
     b.size = 1;
-    b.sign = 0;
-    b.dynamic = 0;
+    b.flags = 0;
     return b;
 }
 
@@ -235,8 +260,7 @@ bigint bi_two()
 
     b.data = &leaf;
     b.size = 1;
-    b.sign = 0;
-    b.dynamic = 0;
+    b.flags = 0;
     return b;
 }
 
@@ -248,8 +272,7 @@ bigint bi_minus_one()
 
     b.data = &leaf;
     b.size = 1;
-    b.sign = 1;
-    b.dynamic = 0;
+    b.flags = BIGINT_FLAG_SIGN;
     return b;
 }
 
@@ -263,8 +286,19 @@ bigint *bi_copy(const bigint *bi)
     if (ptr == NULL) return NULL;
 
     memcpy(ptr->data, bi->data, bi->size * sizeof(bi_leaf));
-    ptr->sign = bi->sign;
+    bi_set_negative(ptr, bi_is_negative(bi));
     return ptr;
+}
+
+/* create a direct copy of src in dst and return it */
+/* this function expects dst to be uninitialized when called */
+/* returns NULL on out of memory condition */
+bigint *bi_init_copy(bigint *dst, const bigint *src)
+{
+    if (bi_init(dst) == NULL ||
+            bi_copy_to(dst, src) == NULL)
+        return NULL;
+    return dst;
 }
 
 /* copy magnitude of src to previously created bigint dst */
@@ -288,29 +322,14 @@ bigint *bi_copy_mag_to(bigint *dst, const bigint *src)
 bigint *bi_copy_to(bigint *dst, const bigint *src)
 {
     if (bi_copy_mag_to(dst, src) == NULL) return NULL;
-    dst->sign = src->sign;
-    return dst;
-}
-
-/* copy src to non-initialized stack-allocated bigint dst */
-/* returns NULL and destroys dst on out of memory condition, otherwise returns dst */
-/* copying to the same bigint has no effect */
-bigint *bi_move_init_static(bigint *dst, const bigint *src)
-{
-    if (dst == src)
-        return dst;
-    else if (src->data == src->buffer)
-        return bi_copy_init_static(dst, src);
-    else
-        *dst = *src;
-    dst->dynamic = 0;
+    bi_set_negative(dst, bi_is_negative(src));
     return dst;
 }
 
 /* assigns a previously created bigint the value 0 */
 bigint *bi_clear(bigint *bi)
 {
-    bi->sign = 0;
+    bi_set_negative(bi, 0);
     memset(bi->data, 0, bi->size * sizeof(bi_leaf));
     return bi;
 }
@@ -338,7 +357,7 @@ bigint *bi_assign(bigint *bi, bi_signed_leaf value)
         uvalue = (bi_leaf) -value;
     if (bi_assignu(bi, uvalue) == NULL)
         return NULL;
-    bi->sign = value < 0;
+    bi_set_negative(bi, value < 0);
     return bi;
 }
 
@@ -357,7 +376,7 @@ bigint *bi_assignl(bigint *bi, bi_intmax value)
 
     if (bi_assignlu(bi, uvalue) == NULL)
         return NULL;
-    bi->sign = value < 0;
+    bi_set_negative(bi, value < 0);
     return bi;
 }
 
@@ -370,7 +389,6 @@ bigint *bi_assignlu(bigint *bi, bi_uintmax uvalue)
     bi_clear(bi);
     if (bi_resize(bi, BIGINT_LEAFS_PER_BI_INTMAX) == NULL) return NULL;
 
-    bi->sign = 0;
     for (; i < sizeof(uvalue)*CHAR_BIT/8; i += BIGINT_LEAFBYTES)
     {
         bi->data[i/BIGINT_LEAFBYTES] = uvalue;
@@ -390,7 +408,7 @@ bi_leaf bi_to_intu(const bigint *bi)
 bi_signed_leaf bi_to_int(const bigint *bi)
 {
     bi_signed_leaf result = bi->data[0] & BIGINT_SIGNED_LEAFMAX;
-    return bi->sign? -result: result;
+    return bi_is_negative(bi)? -result: result;
 }
 
 /* converts a bigint to an bi_intmax */
@@ -399,7 +417,7 @@ bi_intmax bi_to_intl(const bigint *bi)
     bi_uintmax uvalue = bi_to_intlu(bi);
 
     /* TODO: may have portability issues */
-    return bi->sign? -(bi_intmax) uvalue: (bi_intmax) uvalue;
+    return bi_is_negative(bi)? -(bi_intmax) uvalue: (bi_intmax) uvalue;
 }
 
 /* converts a bigint to a bi_uintmax */
@@ -437,6 +455,9 @@ bigint *bi_assign_float(bigint *bi, float f, bi_libmath_err *err)
     }
     else
     {
+        if (err != NULL)
+            *err = bi_libmath_none;
+
         neg = f < 0.0;
         /* convert to whole number */
         mantissa = floorf(fabsf(f));
@@ -489,6 +510,9 @@ bigint *bi_assign_double(bigint *bi, double f, bi_libmath_err *err)
     }
     else
     {
+        if (err != NULL)
+            *err = bi_libmath_none;
+
         neg = f < 0.0;
         /* convert to whole number */
         mantissa = floor(fabs(f));
@@ -541,6 +565,9 @@ bigint *bi_assign_doublel(bigint *bi, long double f, bi_libmath_err *err)
     }
     else
     {
+        if (err != NULL)
+            *err = bi_libmath_none;
+
         neg = f < 0.0;
         /* convert to whole number */
         mantissa = floorl(fabsl(f));
@@ -597,7 +624,7 @@ float bi_to_float(const bigint *bi)
     else
         result = bi_to_intlu(bi);
 
-    if (bi->sign)
+    if (bi_is_negative(bi))
         result = -result;
     return result;
 }
@@ -625,7 +652,7 @@ double bi_to_double(const bigint *bi)
     else
         result = bi_to_intlu(bi);
 
-    if (bi->sign)
+    if (bi_is_negative(bi))
         result = -result;
     return result;
 }
@@ -653,11 +680,11 @@ long double bi_to_doublel(const bigint *bi)
     else
         result = bi_to_intlu(bi);
 
-    if (bi->sign)
+    if (bi_is_negative(bi))
         result = -result;
     return result;
 }
-#endif
+#endif // BIGINT_ENABLE_LIBMATH
 
 /* compares two bigints. returns -1 if bi < bi2, 0 if bi == b2, 1 if bi > b2 */
 /* only compares magnitude, does not compare signs */
@@ -687,11 +714,11 @@ int bi_cmp_mag(const bigint *bi, const bigint *bi2)
 /* compares signs as well as magnitude */
 int bi_cmp_imm(const bigint *bi, bi_signed_leaf val)
 {
-    size_t vsign = val < 0;
+    int vsign = val < 0;
     bi_leaf v = val >= 0? (bi_leaf) val: -val == val? (bi_leaf) 1 << (sizeof(val)*CHAR_BIT - 1): (bi_leaf) -val;
-    if (bi->sign > vsign) /* negative, positive */
+    if (bi_is_negative(bi) > vsign) /* negative, positive */
         return -1;
-    else if (bi->sign < vsign) /* positive, negative */
+    else if (bi_is_negative(bi) < vsign) /* positive, negative */
         return 1;
     else
     {
@@ -708,7 +735,7 @@ int bi_cmp_imm(const bigint *bi, bi_signed_leaf val)
 /* compares signs as well as magnitude */
 int bi_cmp_immu(const bigint *bi, bi_leaf val)
 {
-    if (bi->sign) /* negative, positive */
+    if (bi_is_negative(bi)) /* negative, positive */
         return -1;
     else
     {
@@ -724,14 +751,56 @@ int bi_cmp_immu(const bigint *bi, bi_leaf val)
 /* returns 1 if bi is negative, 0 if positive or zero */
 int bi_is_negative(const bigint *bi)
 {
-    return bi->sign;
+    return (bi->flags & BIGINT_FLAG_SIGN) >> BIGINT_FLAG_SIGN_SHIFT;
+}
+
+/* sets sign of bi to `value` */
+void bi_set_negative(bigint *bi, int value)
+{
+    bi->flags = (bi->flags & ~BIGINT_FLAG_SIGN) | ((value != 0) << BIGINT_FLAG_SIGN_SHIFT);
+}
+
+/* returns 1 if bi is growable, 0 otherwise */
+int bi_is_growable(const bigint *bi)
+{
+    return (bi->flags & BIGINT_FLAG_GROWABLE) >> BIGINT_FLAG_GROWABLE_SHIFT;
+}
+
+/* sets "growable" flag of bi to `value` */
+void bi_set_growable(bigint *bi, int value)
+{
+    bi->flags = (bi->flags & ~BIGINT_FLAG_GROWABLE) | ((value != 0) << BIGINT_FLAG_GROWABLE_SHIFT);
+}
+
+/* returns 1 if bi has a freeable data pointer, 0 otherwise */
+int bi_is_freeable(const bigint *bi)
+{
+    return (bi->flags & BIGINT_FLAG_FREEABLE) >> BIGINT_FLAG_FREEABLE_SHIFT;
+}
+
+/* sets whether bi has a freeable data pointer or not */
+void bi_set_freeable(bigint *bi, int value)
+{
+    bi->flags = (bi->flags & ~BIGINT_FLAG_FREEABLE) | ((value != 0) << BIGINT_FLAG_FREEABLE_SHIFT);
+}
+
+/* returns 1 if bi is a destroyable struct, 0 otherwise */
+int bi_is_destroyable(const bigint *bi)
+{
+    return (bi->flags & BIGINT_FLAG_DESTROYABLE) >> BIGINT_FLAG_DESTROYABLE_SHIFT;
+}
+
+/* sets whether bi is a destroyable struct or not */
+void bi_set_destroyable(bigint *bi, int value)
+{
+    bi->flags = (bi->flags & ~BIGINT_FLAG_DESTROYABLE) | ((value != 0) << BIGINT_FLAG_DESTROYABLE_SHIFT);
 }
 
 /* compares bi with 0. returns -1 if bi < 0, 0 if bi == 0, 1 if bi > 0 */
 /* compares signs as well as magnitude */
 int bi_cmp_zero(const bigint *bi)
 {
-    if (bi->sign)
+    if (bi_is_negative(bi))
         return -1;
     else if (bi_is_zero(bi))
         return 0;
@@ -743,11 +812,11 @@ int bi_cmp_zero(const bigint *bi)
 /* compares signs as well as magnitude */
 int bi_cmp(const bigint *bi, const bigint *bi2)
 {
-    if (bi->sign > bi2->sign) /* negative, positive */
+    if (bi_is_negative(bi) > bi_is_negative(bi2)) /* negative, positive */
         return -1;
-    else if (bi->sign < bi2->sign) /* positive, negative */
+    else if (bi_is_negative(bi) < bi_is_negative(bi2)) /* positive, negative */
         return 1;
-    else if (bi->sign == 0 && bi2->sign == 0) /* positive, positive */
+    else if (bi_is_negative(bi) == 0 && bi_is_negative(bi2) == 0) /* positive, positive */
         return bi_cmp_mag(bi, bi2);
     else /* negative, negative */
         return -bi_cmp_mag(bi, bi2);
@@ -762,7 +831,7 @@ int bi_is_zero(const bigint *bi)
 /* returns 1 if bi is positive one, zero otherwise */
 int bi_is_one(const bigint *bi)
 {
-    return bi->data[0] == 1 && !bi->sign && bi_used(bi) == 1;
+    return bi->data[0] == 1 && !bi_is_negative(bi) && bi_used(bi) == 1;
 }
 
 /* returns 1 if bi is a power of 2 (has only one bit set), zero otherwise */
@@ -925,9 +994,9 @@ int bi_trailing_zeroes(const bigint *bi)
 bigint *bi_negate_assign(bigint *bi)
 {
     if (!bi_is_zero(bi))
-        bi->sign = !bi->sign;
+        bi->flags ^= BIGINT_FLAG_SIGN;
     else
-        bi->sign = 0;
+        bi->flags &= ~BIGINT_FLAG_SIGN;
 
     return bi;
 }
@@ -944,7 +1013,7 @@ bigint *bi_negate(const bigint *bi)
 /* converts bi to the absolute value of bi */
 bigint *bi_abs_assign(bigint *bi)
 {
-    bi->sign = 0;
+    bi->flags &= ~BIGINT_FLAG_SIGN;
     return bi;
 }
 
@@ -1192,8 +1261,8 @@ static bigint *bi_add_invert(bigint *dst, const bigint *bi, const bigint *bi2, i
     bi_dleaf carry = 0;
     int invert1;
 
-    invert1 = bi->sign;
-    invert2 = invert2? !bi2->sign: bi2->sign;
+    invert1 = bi_is_negative(bi);
+    invert2 = invert2? !bi_is_negative(bi2): bi_is_negative(bi2);
 
     /* add only if signs are equal, subtract otherwise */
     if (invert1 != invert2)
@@ -1234,7 +1303,7 @@ static bigint *bi_add_invert(bigint *dst, const bigint *bi, const bigint *bi2, i
     }
 
     result->data[i] = carry;
-    result->sign = invert1;
+    bi_set_negative(result, invert1);
 
     return result;
 }
@@ -1248,7 +1317,7 @@ static bigint *bi_add_imm_invert(bigint *dst, const bigint *bi, bi_signed_leaf v
     bi_dleaf carry = val >= 0? (bi_dleaf) val: -val == val? (bi_dleaf) 1 << (sizeof(val)*CHAR_BIT - 1): (bi_dleaf) -val;
     int invert1;
 
-    invert1 = bi->sign;
+    invert1 = bi_is_negative(bi);
     invert2 = invert2? val >= 0: val < 0;
 
     /* add only if signs are equal, subtract otherwise */
@@ -1278,100 +1347,7 @@ static bigint *bi_add_imm_invert(bigint *dst, const bigint *bi, bi_signed_leaf v
     }
 
     result->data[i] = carry;
-    result->sign = invert1;
-
-    return result;
-}
-
-static bigint *bi_sub_leaf(bigint *dst, const bigint *bi, bi_leaf val, int invert2);
-
-/* adds val to bi and returns the result in dst, or a new bigint if dst is NULL */
-/* returns NULL on out of memory condition; the parameters are not destroyed */
-static bigint *bi_add_leaf(bigint *dst, const bigint *bi, bi_leaf val)
-{
-    bigint *result = dst;
-    size_t i = 0, bi_size = bi->size - !bi_full(bi);
-    bi_dleaf carry = val;
-
-    /* add only if signs are equal, subtract otherwise */
-    if (bi->sign)
-    {
-        /* negative + positive = negative - negative */
-        /* positive + negative = positive - positive */
-        return bi_sub_leaf(dst, bi, val, 1);
-    }
-
-    if (dst == NULL)
-    {
-        result = bi_new_sized(max(BIGINT_MINLEAFS, bi_size + 1));
-        if (result == NULL) return NULL;
-    }
-    else
-    {
-        if (bi_resize(result, bi_size + 1) == NULL)
-            return NULL;
-    }
-
-    for (; i < bi_size; ++i)
-    {
-        carry += bi->data[i];
-        result->data[i] = carry;
-        carry >>= BIGINT_LEAFBITS;
-    }
-
-    result->data[i] = carry;
-
-    return result;
-}
-
-/* subtracts val from bi and returns the result in dst, or a new bigint if dst is NULL */
-/* returns NULL on out of memory condition; the parameters are not destroyed */
-static bigint *bi_sub_leaf(bigint *dst, const bigint *bi, bi_leaf val, int invert2)
-{
-    bigint *result = dst;
-    size_t i = 0, bi_size;
-    bi_dleaf borrow = val;
-    int invert1 = bi->sign;
-    int mag_cmp = 0, swapped = 0;
-
-    mag_cmp = (bi->data[0] > borrow || bi_used(bi) > 1) - (bi->data[0] < borrow);
-
-    if (mag_cmp < 0)
-    {
-        bi_leaf temp = bi->data[0];
-        bi->data[0] = borrow;
-        borrow = temp;
-
-        swapped = invert1;
-        invert1 = invert2;
-        invert2 = swapped;
-
-        swapped = 1;
-    }
-    bi_size = bi->size - !bi_full(bi);
-
-    /* subtract only if signs are equal, add otherwise */
-    if (invert1 != invert2)
-    {
-        /* negative - positive = negative + negative */
-        /* positive - negative = positive + positive */
-        return bi_add_leaf(dst, bi, val);
-    }
-
-    if (dst == NULL)
-    {
-        result = bi_new_sized(max(BIGINT_MINLEAFS, bi_size));
-        if (result == NULL) return NULL;
-    }
-
-    for (; i < result->size; ++i)
-    {
-        borrow = bi->data[i] - borrow;
-        result->data[i] = borrow;
-        borrow >>= BIGINT_LEAFBITS*2-1;
-    }
-
-    result->sign = (invert1? !swapped: swapped) && mag_cmp;
+    bi_set_negative(result, invert1);
 
     return result;
 }
@@ -1386,8 +1362,8 @@ static bigint *bi_sub_invert(bigint *dst, const bigint *bi, const bigint *bi2, i
     int invert1;
     int mag_cmp = 0, swapped = 0;
 
-    invert1 = bi->sign;
-    invert2 = invert2? !bi2->sign: bi2->sign;
+    invert1 = bi_is_negative(bi);
+    invert2 = invert2? !bi_is_negative(bi2): bi_is_negative(bi2);
 
     /* subtract only if signs are equal, add otherwise */
     if (invert1 != invert2)
@@ -1441,7 +1417,7 @@ static bigint *bi_sub_invert(bigint *dst, const bigint *bi, const bigint *bi2, i
         borrow >>= BIGINT_LEAFBITS*2-1;
     }
 
-    result->sign = (invert1? !swapped: swapped) && mag_cmp;
+    bi_set_negative(result, (invert1? !swapped: swapped) && mag_cmp);
 
     return result;
 }
@@ -1471,7 +1447,7 @@ static bigint *bi_fast_sub_assign(bigint *bi, const bigint *bi2)
     return bi;
 }
 
-/* subtracts val from bi and returns the result in dst, or a new bigint if dst is NULL */
+/* subtracts bi2 from bi and returns the result in a new bigint */
 /* returns NULL on out of memory condition; the parameters are not destroyed */
 static bigint *bi_sub_imm_invert(bigint *dst, const bigint *bi, bi_signed_leaf val, int invert2)
 {
@@ -1481,7 +1457,7 @@ static bigint *bi_sub_imm_invert(bigint *dst, const bigint *bi, bi_signed_leaf v
     int invert1;
     int mag_cmp = 0, swapped = 0;
 
-    invert1 = bi->sign;
+    invert1 = bi_is_negative(bi);
     invert2 = invert2? val >= 0: val < 0;
 
     mag_cmp = (bi->data[0] > borrow || bi_used(bi) > 1) - (bi->data[0] < borrow);
@@ -1521,7 +1497,7 @@ static bigint *bi_sub_imm_invert(bigint *dst, const bigint *bi, bi_signed_leaf v
         borrow >>= BIGINT_LEAFBITS*2-1;
     }
 
-    result->sign = (invert1? !swapped: swapped) && mag_cmp;
+    bi_set_negative(result, (invert1? !swapped: swapped) && mag_cmp);
 
     return result;
 }
@@ -1547,25 +1523,11 @@ bigint *bi_add_immediate(const bigint *bi, bi_signed_leaf val)
     return bi_add_imm_invert(NULL, bi, val, 0);
 }
 
-/* adds bi and val and sets bi to the result. returns bi */
+/* adds bi and bi2 and sets bi to the result. returns bi */
 /* returns NULL and destroys bi on out of memory condition */
 bigint *bi_add_immediate_assign(bigint *bi, bi_signed_leaf val)
 {
     return bi_add_imm_invert(bi, bi, val, 0);
-}
-
-/* adds bi and val and returns the result in a new bigint */
-/* returns NULL on out of memory or erroneous parameter conditions; the parameters are not destroyed */
-bigint *bi_add_immediate_leaf(const bigint *bi, bi_leaf val)
-{
-    return bi_add_leaf(NULL, bi, val);
-}
-
-/* adds bi and val and sets bi to the result. returns bi */
-/* returns NULL and destroys bi on out of memory condition */
-bigint *bi_add_immediate_leaf_assign(bigint *bi, bi_leaf val)
-{
-    return bi_add_leaf(bi, bi, val);
 }
 
 /* subtracts bi2 from bi and returns the result in a new bigint */
@@ -1594,20 +1556,6 @@ bigint *bi_sub_immediate(const bigint *bi, bi_signed_leaf val)
 bigint *bi_sub_immediate_assign(bigint *bi, bi_signed_leaf val)
 {
     return bi_sub_imm_invert(bi, bi, val, 0);
-}
-
-/* subtracts val from bi and returns the result in a new bigint */
-/* returns NULL on out of memory or erroneous parameter conditions; the parameters are not destroyed */
-bigint *bi_sub_immediate_leaf(const bigint *bi, bi_leaf val)
-{
-    return bi_sub_leaf(NULL, bi, val, 0);
-}
-
-/* subtracts val from bi and sets bi to the result. returns bi */
-/* returns NULL and destroys bi on out of memory condition */
-bigint *bi_sub_immediate_leaf_assign(bigint *bi, bi_leaf val)
-{
-    return bi_sub_leaf(bi, bi, val, 0);
 }
 
 /* multiplies bi and bi2 using standard multiplication */
@@ -1747,7 +1695,7 @@ static bigint *bi_karatsuba_mul(const bigint *bi, const bigint *bi2, size_t bi_u
         bigint high1, low1, high2, low2, *z0 = NULL, *z1 = NULL, *z2 = NULL, *temp = NULL, *temp2 = NULL;
 
         low1 = high1 = *bi;
-        low1.sign = high1.sign = 0;
+        low1.flags = high1.flags = 0;
         low1.size = min(m, bi_used_leafs);
         if (bi_used_leafs > m)
         {
@@ -1757,7 +1705,7 @@ static bigint *bi_karatsuba_mul(const bigint *bi, const bigint *bi2, size_t bi_u
         else
             high1.size = 0;
         low2 = high2 = *bi2;
-        low2.sign = high2.sign = 0;
+        low2.flags = high2.flags = 0;
         low2.size = min(m, bi2_used_leafs);
         if (bi2_used_leafs > m)
         {
@@ -1806,20 +1754,17 @@ static bigint *bi_karatsuba_mul(const bigint *bi, const bigint *bi2, size_t bi_u
 
             if (pthread_join(low_thread, &vz0)) goto cleanup;
             z0 = vz0;
-            if (z0 == NULL) goto cleanup;
 
             if (pthread_join(mid_thread, &vz1)) goto cleanup;
             z1 = vz1;
-            if (z1 == NULL) goto cleanup;
 
             if (pthread_join(high_thread, &vz2)) goto cleanup;
             z2 = vz2;
-            if (z2 == NULL) goto cleanup;
 
-            if (temp != &low1) bi_destroy(temp);
-            temp=NULL;
-            if (temp2 != &low2) bi_destroy(temp2);
-            temp2=NULL;
+            if (z0 == NULL || z1 == NULL || z2 == NULL) goto cleanup;
+
+            if (temp != &low1) bi_destroy(temp); temp=NULL;
+            if (temp2 != &low2) bi_destroy(temp2); temp2=NULL;
         }
         else
         {
@@ -1843,10 +1788,8 @@ static bigint *bi_karatsuba_mul(const bigint *bi, const bigint *bi2, size_t bi_u
             if (temp2 == NULL) goto cleanup;
             z1 = bi_karatsuba_mul(temp, temp2, bi_used(temp), bi_used(temp2), 0);
             if (z1 == NULL) goto cleanup;
-            if (temp != &low1) bi_destroy(temp);
-            temp=NULL;
-            if (temp2 != &low2) bi_destroy(temp2);
-            temp2=NULL;
+            if (temp != &low1) bi_destroy(temp); temp=NULL;
+            if (temp2 != &low2) bi_destroy(temp2); temp2=NULL;
             /* calculate z2 = high1 * high2 */
             z2 = bi_karatsuba_mul(&high1, &high2, bi_used(&high1), bi_used(&high2), 0);
             if (z2 == NULL) goto cleanup;
@@ -1907,10 +1850,10 @@ static bigint *bi_karatsuba_mul(const bigint *bi, const bigint *bi2, size_t bi_u
             z1 = mid_data.result;
             z2 = high_data.result;
 
-            if (temp != &low1) bi_destroy(temp);
-            temp=NULL;
-            if (temp2 != &low2) bi_destroy(temp2);
-            temp2=NULL;
+            if (z0 == NULL || z1 == NULL || z2 == NULL) goto cleanup;
+
+            if (temp != &low1) bi_destroy(temp); temp=NULL;
+            if (temp2 != &low2) bi_destroy(temp2); temp2=NULL;
         }
         else
         {
@@ -1934,10 +1877,8 @@ static bigint *bi_karatsuba_mul(const bigint *bi, const bigint *bi2, size_t bi_u
             if (temp2 == NULL) goto cleanup;
             z1 = bi_karatsuba_mul(temp, temp2, bi_used(temp), bi_used(temp2), 0);
             if (z1 == NULL) goto cleanup;
-            if (temp != &low1) bi_destroy(temp);
-            temp=NULL;
-            if (temp2 != &low2) bi_destroy(temp2);
-            temp2=NULL;
+            if (temp != &low1) bi_destroy(temp); temp=NULL;
+            if (temp2 != &low2) bi_destroy(temp2); temp2=NULL;
             /* calculate z2 = high1 * high2 */
             z2 = bi_karatsuba_mul(&high1, &high2, bi_used(&high1), bi_used(&high2), 0);
             if (z2 == NULL) goto cleanup;
@@ -1973,10 +1914,8 @@ static bigint *bi_karatsuba_mul(const bigint *bi, const bigint *bi2, size_t bi_u
         if (temp2 == NULL) goto cleanup;
         z1 = bi_karatsuba_mul(temp, temp2, bi_used(temp), bi_used(temp2));
         if (z1 == NULL) goto cleanup;
-        if (temp != &low1) bi_destroy(temp);
-        temp=NULL;
-        if (temp2 != &low2) bi_destroy(temp2);
-        temp2=NULL;
+        if (temp != &low1) bi_destroy(temp); temp=NULL;
+        if (temp2 != &low2) bi_destroy(temp2); temp2=NULL;
         /* calculate z2 = high1 * high2 */
         z2 = bi_karatsuba_mul(&high1, &high2, bi_used(&high1), bi_used(&high2));
         if (z2 == NULL) goto cleanup;
@@ -1992,7 +1931,7 @@ static bigint *bi_karatsuba_mul(const bigint *bi, const bigint *bi2, size_t bi_u
         bi_destroy(z0);
 #endif
 
-        z2->sign = bi->sign != bi2->sign;
+        bi_set_negative(z2, bi_is_negative(bi) != bi_is_negative(bi2));
         return z2;
 cleanup:
         bi_destroy(z0);
@@ -2026,7 +1965,7 @@ static bigint *bi_toom_cook_mul(const bigint *bi, const bigint *bi2, size_t bi_u
         bigint *r0 = NULL, *r1 = NULL, *r2 = NULL, *r3 = NULL, *r4 = NULL;
 
         low1 = mid1 = high1 = *bi;
-        low1.sign = mid1.sign = high1.sign = 0;
+        low1.flags = mid1.flags = high1.flags = 0;
         low1.size = min(m, bi_used_leafs);
         if (bi_used_leafs > m)
         {
@@ -2044,7 +1983,7 @@ static bigint *bi_toom_cook_mul(const bigint *bi, const bigint *bi2, size_t bi_u
             mid1.size = high1.size = 0;
 
         low2 = mid2 = high2 = *bi2;
-        low2.sign = mid2.sign = high2.sign = 0;
+        low2.flags = mid2.flags = high2.flags = 0;
         low2.size = min(m, bi2_used_leafs);
         if (bi2_used_leafs > m)
         {
@@ -2151,23 +2090,19 @@ static bigint *bi_toom_cook_mul(const bigint *bi, const bigint *bi2, size_t bi_u
 
             if (pthread_join(p0_thread, &vp0)) goto cleanup;
             p0 = vp0;
-            if (p0 == NULL) goto cleanup;
 
             if (pthread_join(p1_thread, &vp1)) goto cleanup;
             p1 = vp1;
-            if (p1 == NULL) goto cleanup;
 
             if (pthread_join(p2_thread, &vp2)) goto cleanup;
             p2 = vp2;
-            if (p2 == NULL) goto cleanup;
 
             if (pthread_join(p3_thread, &vp3)) goto cleanup;
             p3 = vp3;
-            if (p3 == NULL) goto cleanup;
 
             if (pthread_join(p4_thread, &vp4)) goto cleanup;
             p4 = vp4;
-            if (p4 == NULL) goto cleanup;
+            if (p0 == NULL || p1 == NULL || p2 == NULL || p3 == NULL || p4 == NULL) goto cleanup;
 
             bi_destroy(temp); temp=NULL;
             bi_destroy(temp2); temp2=NULL;
@@ -2175,10 +2110,8 @@ static bigint *bi_toom_cook_mul(const bigint *bi, const bigint *bi2, size_t bi_u
             bi_destroy(temp4); temp4=NULL;
             bi_destroy(temp5); temp5=NULL;
             bi_destroy(temp6); temp6=NULL;
-            if (intermediate1 != &low1) bi_destroy(intermediate1);
-            intermediate1=NULL;
-            if (intermediate2 != &low2) bi_destroy(intermediate2);
-            intermediate2=NULL;
+            if (intermediate1 != &low1) bi_destroy(intermediate1); intermediate1=NULL;
+            if (intermediate2 != &low2) bi_destroy(intermediate2); intermediate2=NULL;
         }
         else
         {
@@ -2208,10 +2141,8 @@ static bigint *bi_toom_cook_mul(const bigint *bi, const bigint *bi2, size_t bi_u
             p2 = bi_toom_cook_mul(temp, temp2, bi_used(temp), bi_used(temp2), 0);
             if (p2 == NULL) goto cleanup;
 
-            if (intermediate1 != &low1) bi_destroy(intermediate1);
-            intermediate1=NULL;
-            if (intermediate2 != &low2) bi_destroy(intermediate2);
-            intermediate2=NULL;
+            if (intermediate1 != &low1) bi_destroy(intermediate1); intermediate1=NULL;
+            if (intermediate2 != &low2) bi_destroy(intermediate2); intermediate2=NULL;
             // Do not cleanup temp and temp2 because the next step needs them
 
             /* calculate p3 = (low1 - 2*mid1 + 4*high1) * (low2 - 2*mid2 + 4*high2) */
@@ -2280,7 +2211,7 @@ static bigint *bi_toom_cook_mul(const bigint *bi, const bigint *bi2, size_t bi_u
         // no need to free p0 because it's an alias for r0
         // no need to free p4 because we are returning it as r4 (r4 is an alias)
         // p1, p2, p3, temp, temp2, intermediate1, and intermediate2 are already freed
-        r4->sign = bi->sign != bi2->sign;
+        bi_set_negative(r4, bi_is_negative(bi) != bi_is_negative(bi2));
         return r4;
 
 cleanup:
@@ -2456,16 +2387,16 @@ static bigint *bi_toom_cook_mul(const bigint *bi, const bigint *bi2, size_t bi_u
             p3 = p3_data.result;
             p4 = p4_data.result;
 
+            if (p0 == NULL || p1 == NULL || p2 == NULL || p3 == NULL || p4 == NULL) goto cleanup;
+
             bi_destroy(temp); temp=NULL;
             bi_destroy(temp2); temp2=NULL;
             bi_destroy(temp3); temp3=NULL;
             bi_destroy(temp4); temp4=NULL;
             bi_destroy(temp5); temp5=NULL;
             bi_destroy(temp6); temp6=NULL;
-            if (intermediate1 != &low1) bi_destroy(intermediate1);
-            intermediate1=NULL;
-            if (intermediate2 != &low2) bi_destroy(intermediate2);
-            intermediate2=NULL;
+            if (intermediate1 != &low1) bi_destroy(intermediate1); intermediate1=NULL;
+            if (intermediate2 != &low2) bi_destroy(intermediate2); intermediate2=NULL;
         }
         else
         {
@@ -2495,10 +2426,8 @@ static bigint *bi_toom_cook_mul(const bigint *bi, const bigint *bi2, size_t bi_u
             p2 = bi_toom_cook_mul(temp, temp2, bi_used(temp), bi_used(temp2), 0);
             if (p2 == NULL) goto cleanup;
 
-            if (intermediate1 != &low1) bi_destroy(intermediate1);
-            intermediate1=NULL;
-            if (intermediate2 != &low2) bi_destroy(intermediate2);
-            intermediate2=NULL;
+            if (intermediate1 != &low1) bi_destroy(intermediate1); intermediate1=NULL;
+            if (intermediate2 != &low2) bi_destroy(intermediate2); intermediate2=NULL;
             // Do not cleanup temp and temp2 because the next step needs them
 
             /* calculate p3 = (low1 - 2*mid1 + 4*high1) * (low2 - 2*mid2 + 4*high2) */
@@ -2692,10 +2621,8 @@ static bigint *bi_toom_cook_mul(const bigint *bi, const bigint *bi2, size_t bi_u
         p2 = bi_toom_cook_mul(temp, temp2, bi_used(temp), bi_used(temp2));
         if (p2 == NULL) goto cleanup;
 
-        if (intermediate1 != &low1) bi_destroy(intermediate1);
-        intermediate1=NULL;
-        if (intermediate2 != &low2) bi_destroy(intermediate2);
-        intermediate2=NULL;
+        if (intermediate1 != &low1) bi_destroy(intermediate1); intermediate1=NULL;
+        if (intermediate2 != &low2) bi_destroy(intermediate2); intermediate2=NULL;
         // Do not cleanup temp and temp2 because the next step needs them
 
         /* calculate p3 = (low1 - 2*mid1 + 4*high1) * (low2 - 2*mid2 + 4*high2) */
@@ -2797,13 +2724,13 @@ bigint *bi_mul(const bigint *bi, const bigint *bi2)
     else if (bi_used_leafs == 1)
     {
         result = bi_mul_immediateu(bi2, bi->data[0]);
-        if (result != NULL) result->sign = bi->sign != bi2->sign;
+        if (result != NULL) bi_set_negative(result, bi_is_negative(bi) != bi_is_negative(bi2));
         return result;
     }
     else if (bi2_used_leafs == 1)
     {
         result = bi_mul_immediateu(bi, bi2->data[0]);
-        if (result != NULL) result->sign = bi->sign != bi2->sign;
+        if (result != NULL) bi_set_negative(result, bi_is_negative(bi) != bi_is_negative(bi2));
         return result;
     }
 
@@ -2823,7 +2750,7 @@ bigint *bi_mul(const bigint *bi, const bigint *bi2)
         result = bi_mul_internal(bi, bi2, bi_used_leafs, bi2_used_leafs);
 
     if (result == NULL) return NULL;
-    result->sign = bi->sign != bi2->sign;
+    bi_set_negative(result, bi_is_negative(bi) != bi_is_negative(bi2));
     return result;
 }
 
@@ -2895,7 +2822,7 @@ bigint *bi_mul_immediate_assign(bigint *bi, bi_signed_leaf val)
 
     size_t sz, i;
 
-    bi->sign = bi->sign != (val < 0);
+    bi_set_negative(bi, bi_is_negative(bi) != (val < 0));
 
     if (mul == 1) return bi;
     else if (mul == 0) return bi_clear(bi);
@@ -2941,7 +2868,7 @@ static bigint *bi_square_internal(const bigint *bi, size_t used_leafs)
     else if (sz == 1)
     {
         result = bi_mul_immediateu(bi, bi->data[0]);
-        if (result != NULL) result->sign = 0;
+        if (result != NULL) bi_set_negative(result, 0);
         return result;
     }
 
@@ -3030,8 +2957,7 @@ static bigint *bi_karatsuba_square(const bigint *bi, size_t bi_used_leafs)
             z2 = vz2;
             if (z2 == NULL) goto cleanup;
 
-            if (temp != &low) bi_destroy(temp);
-            temp=NULL;
+            if (temp != &low) bi_destroy(temp); temp=NULL;
         }
         else
         {
@@ -3042,8 +2968,7 @@ static bigint *bi_karatsuba_square(const bigint *bi, size_t bi_used_leafs)
             if (temp == NULL) goto cleanup;
             z1 = bi_karatsuba_square(temp, bi_used(temp), 0);
             if (z1 == NULL) goto cleanup;
-            if (temp != &low) bi_destroy(temp);
-            temp=NULL;
+            if (temp != &low) bi_destroy(temp); temp=NULL;
             /* calculate z2 = high1 * high2 */
             z2 = bi_karatsuba_square(&high, bi_used(&high), 0);
             if (z2 == NULL) goto cleanup;
@@ -3090,8 +3015,7 @@ static bigint *bi_karatsuba_square(const bigint *bi, size_t bi_used_leafs)
             z1 = mid_data.result;
             z2 = high_data.result;
 
-            if (temp != &low) bi_destroy(temp);
-            temp=NULL;
+            if (temp != &low) bi_destroy(temp); temp=NULL;
         }
         else
         {
@@ -3102,8 +3026,7 @@ static bigint *bi_karatsuba_square(const bigint *bi, size_t bi_used_leafs)
             if (temp == NULL) goto cleanup;
             z1 = bi_karatsuba_square(temp, bi_used(temp), 0);
             if (z1 == NULL) goto cleanup;
-            if (temp != &low) bi_destroy(temp);
-            temp=NULL;
+            if (temp != &low) bi_destroy(temp); temp=NULL;
             /* calculate z2 = high1 * high2 */
             z2 = bi_karatsuba_square(&high, bi_used(&high), 0);
             if (z2 == NULL) goto cleanup;
@@ -3174,7 +3097,7 @@ static bigint *bi_toom_cook_square(const bigint *bi, size_t bi_used_leafs, int u
         bigint *r0 = NULL, *r1 = NULL, *r2 = NULL, *r3 = NULL, *r4 = NULL;
 
         low = mid = high = *bi;
-        low.sign = mid.sign = high.sign = 0;
+        low.flags = mid.flags = high.flags = 0;
         low.size = min(m, bi_used_leafs);
         if (bi_used_leafs > m)
         {
@@ -3273,8 +3196,7 @@ static bigint *bi_toom_cook_square(const bigint *bi, size_t bi_used_leafs, int u
             bi_destroy(temp); temp=NULL;
             bi_destroy(temp2); temp2=NULL;
             bi_destroy(temp3); temp3=NULL;
-            if (intermediate != &low) bi_destroy(intermediate);
-            intermediate=NULL;
+            if (intermediate != &low) bi_destroy(intermediate); intermediate=NULL;
         }
         else
         {
@@ -3297,8 +3219,7 @@ static bigint *bi_toom_cook_square(const bigint *bi, size_t bi_used_leafs, int u
             p2 = bi_toom_cook_square(temp, bi_used(temp), 0);
             if (p2 == NULL) goto cleanup;
 
-            if (intermediate != &low) bi_destroy(intermediate);
-            intermediate=NULL;
+            if (intermediate != &low) bi_destroy(intermediate); intermediate=NULL;
             // Do not cleanup temp and temp2 because the next step needs them
 
             /* calculate p3 = (low1 - 2*mid1 + 4*high1) * (low2 - 2*mid2 + 4*high2) */
@@ -3363,7 +3284,7 @@ static bigint *bi_toom_cook_square(const bigint *bi, size_t bi_used_leafs, int u
         // no need to free p0 because it's an alias for r0
         // no need to free p4 because we are returning it as r4 (r4 is an alias)
         // p1, p2, p3, temp, temp2, intermediate1, and intermediate2 are already freed
-        r4->sign = 0;
+        bi_set_negative(r4, 0);
         return r4;
 
 cleanup:
@@ -3490,8 +3411,7 @@ static bigint *bi_toom_cook_square(const bigint *bi, size_t bi_used_leafs, int u
             bi_destroy(temp); temp=NULL;
             bi_destroy(temp2); temp2=NULL;
             bi_destroy(temp3); temp3=NULL;
-            if (intermediate != &low) bi_destroy(intermediate);
-            intermediate=NULL;
+            if (intermediate != &low) bi_destroy(intermediate); intermediate=NULL;
         }
         else
         {
@@ -3514,8 +3434,7 @@ static bigint *bi_toom_cook_square(const bigint *bi, size_t bi_used_leafs, int u
             p2 = bi_toom_cook_square(temp, bi_used(temp), 0);
             if (p2 == NULL) goto cleanup;
 
-            if (intermediate != &low) bi_destroy(intermediate);
-            intermediate=NULL;
+            if (intermediate != &low) bi_destroy(intermediate); intermediate=NULL;
             // Do not cleanup temp because the next step needs it
 
             /* calculate p3 = (low1 - 2*mid1 + 4*high1) * (low2 - 2*mid2 + 4*high2) */
@@ -3664,8 +3583,7 @@ static bigint *bi_toom_cook_square(const bigint *bi, size_t bi_used_leafs)
         p2 = bi_toom_cook_square(temp, bi_used(temp));
         if (p2 == NULL) goto cleanup;
 
-        if (intermediate != &low) bi_destroy(intermediate);
-        intermediate=NULL;
+        if (intermediate != &low) bi_destroy(intermediate); intermediate=NULL;
         // Do not cleanup temp because the next step needs it
 
         /* calculate p3 = (low1 - 2*mid1 + 4*high1) * (low2 - 2*mid2 + 4*high2) */
@@ -3760,14 +3678,14 @@ bigint *bi_square(const bigint *bi)
     else if (bi_used_leafs == 1)
     {
         result = bi_mul_immediateu(bi, bi->data[0]);
-        if (result != NULL) result->sign = 0;
+        if (result != NULL) bi_set_negative(result, 0);
         return result;
     }
 
     if (bi_used_leafs >= BIGINT_TOOM_COOK_MIN_LEAFS)
     {
         bigint b = *bi;
-        b.sign = 0;
+        b.flags = 0;
 
 #if defined(BIGINT_ENABLE_PTHREADS) || defined(BIGINT_ENABLE_WINTHREADS)
         result = bi_toom_cook_square(&b, bi_used_leafs, 1);
@@ -3778,7 +3696,7 @@ bigint *bi_square(const bigint *bi)
     else if (bi_used_leafs >= BIGINT_KARATSUBA_MIN_LEAFS)
     {
         bigint b = *bi;
-        b.sign = 0;
+        b.flags = 0;
 
 #if defined(BIGINT_ENABLE_PTHREADS) || defined(BIGINT_ENABLE_WINTHREADS)
         result = bi_karatsuba_square(&b, bi_used_leafs, 1);
@@ -3790,7 +3708,7 @@ bigint *bi_square(const bigint *bi)
         result = bi_square_internal(bi, bi_used_leafs);
 
     if (result == NULL) return NULL;
-    result->sign = 0;
+    bi_set_negative(result, 0);
     return result;
 }
 
@@ -4030,51 +3948,16 @@ bigint *bi_uexp_assign(bigint *bi, bi_uintmax n)
     else if (bi_is_one(bi)) return bi;
 
     y = bi_new_valueu(1);
-    if (y == NULL) {bi_destroy(bi); return NULL;}
+    if (y == NULL)
+    {
+        bi_destroy(y);
+        return NULL;
+    }
 
     while (n > 1)
     {
         if ((n & 1) && bi_mul_assign(y, bi) == NULL) {bi_destroy(bi); return NULL;}
         n >>= 1;
-        if (bi_square_assign(bi) == NULL) {bi_destroy(y); return NULL;}
-    }
-
-    if (bi_mul_assign(bi, y) == NULL) {bi_destroy(y); return NULL;}
-    bi_destroy(y);
-    return bi;
-}
-
-static bigint *bi_large_uexp_assign(bigint *bi, const bigint *n);
-
-/* raises bi to the nth power and returns the result in a new bigint */
-/* returns NULL on out of memory condition */
-static bigint *bi_large_uexp(const bigint *bi, const bigint *n)
-{
-    bigint *result = bi_copy(bi);
-    if (result == NULL) return NULL;
-    return bi_large_uexp_assign(result, n);
-}
-
-/* raises bi to the nth power and assigns the result to bi, returns bi */
-/* returns NULL and destroys bi on out of memory condition */
-static bigint *bi_large_uexp_assign(bigint *bi, const bigint *n)
-{
-    bigint *y;
-    size_t bits, i;
-
-    if (bi_is_one(n)) return bi;
-    else if (bi_cmp_immu(n, 2) == 0) return bi_square_assign(bi);
-    else if (bi_is_zero(n)) return bi_assignu(bi, 1);
-    else if (bi_is_one(bi)) return bi;
-
-    y = bi_new_valueu(1);
-    if (y == NULL) {bi_destroy(bi); return NULL;}
-
-    bits = bi_bitcount(n);
-    for (i = 0; i+1 < bits; ++i)
-    {
-        if (bi_bit(n, i) && bi_mul_assign(y, bi) == NULL) {bi_destroy(bi); return NULL;}
-
         if (bi_square_assign(bi) == NULL) {bi_destroy(y); return NULL;}
     }
 
@@ -4097,22 +3980,6 @@ bigint *bi_exp_assign(bigint *bi, bi_intmax n)
 {
     if (n < 0) return bi_clear(bi);
     return bi_uexp_assign(bi, n);
-}
-
-/* raises bi to the nth power and returns the result in a new bigint */
-/* returns NULL on out of memory condition */
-bigint *bi_large_exp(const bigint *bi, const bigint *n)
-{
-    if (bi_is_negative(n)) return bi_new();
-    return bi_large_uexp(bi, n);
-}
-
-/* raises bi to the nth power and assigns the result to bi, returns bi */
-/* returns NULL and destroys bi on out of memory condition */
-bigint *bi_large_exp_assign(bigint *bi, const bigint *n)
-{
-    if (bi_is_negative(n)) return bi_clear(bi);
-    return bi_large_uexp_assign(bi, n);
 }
 
 /* raises bi to the nth power and returns the result (using modulo `mod`) in a new bigint */
@@ -4214,7 +4081,7 @@ bigint *bi_large_exp_mod_assign(bigint *bi, const bigint *n, const bigint *mod)
     if (bi_mod_assign(bi, mod) == NULL) {bi_destroy(y); return NULL;}
 
     bits = bi_bitcount(n);
-    for (i = 0; i+1 < bits; ++i)
+    for (i = 0; i < bits; ++i)
     {
         if (bi_bit(n, i) &&
             (bi_mul_assign(y, bi) == NULL ||
@@ -4283,8 +4150,8 @@ static bigint *bi_divmod_internal(bigint *dst, const bigint *bi, const bigint *b
             quotient->data[byte_index] &= ~((bi_leaf) 1 << bit_index);
     }
 
-    remainder->sign = bi->sign && !bi_is_zero(remainder);
-    quotient->sign = bi->sign != bi2->sign && !quotient_zero;
+    bi_set_negative(remainder, bi_is_negative(bi) && !bi_is_zero(remainder));
+    bi_set_negative(quotient, bi_is_negative(bi) != bi_is_negative(bi2) && !quotient_zero);
     *q = quotient;
     *r = remainder;
     return quotient;
@@ -4409,11 +4276,11 @@ static bigint *bi_divmod_3_internal(bigint *dst, const bigint *bi, bigint **q, b
 #endif
     }
 
-    if (bi->sign)
+    if (bi_is_negative(bi))
         *r = -((bi_signed_leaf) remainder);
     else
         *r = remainder;
-    quotient->sign = bi->sign && !bi_is_zero(quotient);
+    bi_set_negative(quotient, bi_is_negative(bi) && !bi_is_zero(quotient));
     *q = quotient;
     return quotient;
 }
@@ -4531,11 +4398,11 @@ static bigint *bi_divmod_10_internal(bigint *dst, const bigint *bi, bigint **q, 
 #endif
     }
 
-    if (bi->sign)
+    if (bi_is_negative(bi))
         *r = -((bi_signed_leaf) remainder);
     else
         *r = remainder;
-    quotient->sign = bi->sign && !bi_is_zero(quotient);
+    bi_set_negative(quotient, bi_is_negative(bi) && !bi_is_zero(quotient));
     *q = quotient;
     return quotient;
 }
@@ -4622,7 +4489,7 @@ static bigint *bi_divmod_immediate_internal(bigint *dst, const bigint *bi, bi_si
     }
     else if (ispow2x(d))
     {
-        *r = bi->sign? -(bi_signed_leaf) (bi_to_intu(bi) & (d-1)): (bi_signed_leaf) (bi_to_intu(bi) & (d-1));
+        *r = bi_is_negative(bi)? -(bi_signed_leaf) (bi_to_intu(bi) & (d-1)): (bi_signed_leaf) (bi_to_intu(bi) & (d-1));
         if (dst == NULL)
             *q = bi_shr(bi, lg2x(d));
         else if (bi_copy_to(dst, bi) != NULL)
@@ -4631,7 +4498,7 @@ static bigint *bi_divmod_immediate_internal(bigint *dst, const bigint *bi, bi_si
             return *q = NULL;
 
         if (*q != NULL)
-            (*q)->sign = bi->sign != (denom < 0) && !bi_is_zero(*q);
+            bi_set_negative(*q, bi_is_negative(bi) != (denom < 0) && !bi_is_zero(*q));
         return *q;
     }
     else if (denom == 3)
@@ -4703,11 +4570,11 @@ static bigint *bi_divmod_immediate_internal(bigint *dst, const bigint *bi, bi_si
         remainder = numer % d;
     }
 #endif
-    if (bi->sign)
+    if (bi_is_negative(bi))
         *r = -((bi_signed_leaf) remainder);
     else
         *r = remainder;
-    quotient->sign = bi->sign != (denom < 0) && !bi_is_zero(quotient);
+    bi_set_negative(quotient, bi_is_negative(bi) != (denom < 0) && !bi_is_zero(quotient));
     *q = quotient;
     return quotient;
 }
@@ -4789,29 +4656,18 @@ bigint *bi_gcd(const bigint *bi, const bigint *bi2)
     v = bi_abs(bi2);
     if (u == NULL || v == NULL) goto cleanup;
 
-    // extract even factor to pow
-    while ((u->data[0] & 1) == 0 && (v->data[0] & 1) == 0)
-    {
-        ++pow;
-        u = bi_shr_assign(u, 1);
-        v = bi_shr_assign(v, 1);
-        if (u == NULL || v == NULL) goto cleanup;
-    }
+    size_t u_trailing_zeros = bi_trailing_zeroes(u);
+    size_t v_trailing_zeros = bi_trailing_zeroes(v);
 
-    // remove even factors of u
-    while ((u->data[0] & 1) == 0)
-    {
-        u = bi_shr_assign(u, 1);
-        if (u == NULL) goto cleanup;
-    }
+    // extract even factor to pow
+    pow = u_trailing_zeros < v_trailing_zeros? u_trailing_zeros: v_trailing_zeros;
+    u = bi_shr_assign(u, u_trailing_zeros); // remove all trailing zeros from u
+    v = bi_shr_assign(v, pow); // remove only common trailing zeros from v
+    if (u == NULL || v == NULL) goto cleanup;
 
     do
     {
-        while ((v->data[0] & 1) == 0)
-        {
-            v = bi_shr_assign(v, 1);
-            if (v == NULL) goto cleanup;
-        }
+        if ((v = bi_shr_assign(v, bi_trailing_zeroes(v))) == NULL) goto cleanup;
 
         if (bi_cmp_mag(u, v) > 0)
             bi_swap(u, v);
@@ -4832,11 +4688,15 @@ cleanup:
 /* swaps contents of bigints a and b */
 void bi_swap(bigint *bi_a, bigint *bi_b)
 {
-    bigint temp;
+    unsigned long attr_a = bi_a->flags, attr_b = bi_b->flags;
 
-    bi_move_init_static(&temp, bi_a);
-    bi_move_init_static(bi_a, bi_b);
-    bi_move_init_static(bi_b, &temp);
+    bigint temp = *bi_a;
+    *bi_a = *bi_b;
+    *bi_b = temp;
+
+    // Some attributes may not be swappable, like destructibility, so reset to their respective states
+    bi_set_destroyable(bi_a, attr_a & BIGINT_FLAG_DESTROYABLE);
+    bi_set_destroyable(bi_b, attr_b & BIGINT_FLAG_DESTROYABLE);
 }
 
 static void bi_fprint_basepow2(FILE *f, const bigint *bi, char *array, size_t array_size, size_t lg2_base)
@@ -4901,7 +4761,7 @@ void bi_fprint(FILE *f, const bigint *bi, size_t base)
     array = malloc(size);
     if (array == NULL) goto cleanup;
 
-    if (bi->sign)
+    if (bi_is_negative(bi))
         fputc('-', f);
 
     if (bi_is_zero(bi))
@@ -4923,7 +4783,7 @@ void bi_fprint(FILE *f, const bigint *bi, size_t base)
     {
         cpy = bi_copy(bi);
         if (cpy == NULL) goto cleanup;
-        cpy->sign = 0;
+        bi_set_negative(cpy, 0);
 
         while (!bi_is_zero(cpy))
         {
@@ -5038,7 +4898,7 @@ bigint_string bi_sprint(const bigint *bi, size_t base)
     array = malloc(size);
     if (array == NULL) goto cleanup;
 
-    if (bi->sign)
+    if (bi_is_negative(bi))
     {
         array[ptr++] = '-';
         neg = 1;
@@ -5060,7 +4920,7 @@ bigint_string bi_sprint(const bigint *bi, size_t base)
     {
         cpy = bi_copy(bi);
         if (cpy == NULL) goto cleanup;
-        cpy->sign = 0;
+        bi_set_negative(cpy, 0);
 
         while (!bi_is_zero(cpy))
         {
@@ -5161,7 +5021,7 @@ int bi_sscan(const char *str, bigint *bi, size_t base)
         c = *str++;
     }
 
-    bi->sign = neg && !bi_is_zero(bi);
+    bi_set_negative(bi, neg && !bi_is_zero(bi));
 
     return hasdigits;
 }
@@ -5231,7 +5091,7 @@ int bi_sscan_n(const char *str, size_t len, bigint *bi, size_t base)
         c = *str++;
     }
 
-    bi->sign = neg && !bi_is_zero(bi);
+    bi_set_negative(bi, neg && !bi_is_zero(bi));
 
     return hasdigits;
 }
@@ -5295,7 +5155,7 @@ int bi_fscan(FILE *f, bigint *bi, size_t base)
         c = fgetc(f);
     }
 
-    bi->sign = neg && !bi_is_zero(bi);
+    bi_set_negative(bi, neg && !bi_is_zero(bi));
 
     return hasdigits;
 }
@@ -5312,13 +5172,11 @@ void bi_destroy(bigint *bi)
 {
     if (bi != NULL)
     {
-        if (bi->data != bi->buffer)
+        if (bi_is_freeable(bi))
             free(bi->data);
 
-        if (bi->dynamic)
+        if (bi_is_destroyable(bi))
             free(bi);
-        else
-            bi_init(bi);
     }
 }
 
