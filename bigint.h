@@ -257,7 +257,15 @@ bigint *bi_sqrt(const bigint *bi);
 bigint *bi_sqrt_assign(bigint *bi);
 bigint *bi_fact(bi_uintmax n);
 bigint *bi_fibonacci(bi_uintmax n);
+bigint *bi_fibonacci_mod(const bigint *n, const bigint *mod);
 int bi_is_fibonacci(const bigint *bi);
+bigint *bi_lucas(bi_uintmax n);
+bigint *bi_lucas_mod(const bigint *n, const bigint *mod);
+int bi_is_prime_naive(const bigint *bi);
+int bi_is_prime_fermat(const bigint *bi, size_t base);
+int bi_is_prime_fibonacci(const bigint *bi);
+int bi_is_prime_lucas(const bigint *bi);
+int bi_is_prime_selfridge(const bigint *bi);
 bigint *bi_uexp(const bigint *bi, bi_uintmax n);
 bigint *bi_uexp_assign(bigint *bi, bi_uintmax n);
 bigint *bi_exp(const bigint *bi, bi_intmax n);
@@ -290,7 +298,7 @@ bigint *bi_divmod_immediate(const bigint *bi, bi_signed_leaf denom, bigint **q, 
 bigint *bi_divmod_immediate_assign(bigint *bi, bi_signed_leaf denom, bi_signed_leaf *r);
 bigint *bi_div_immediate(const bigint *bi, bi_signed_leaf denom);
 bigint *bi_div_immediate_assign(bigint *bi, bi_signed_leaf denom);
-bi_signed_leaf bi_mod_immediate(const bigint *bi, bi_signed_leaf denom);
+bi_signed_leaf bi_mod_immediate(const bigint *bi, bi_signed_leaf denom, int *success);
 bigint *bi_mod_immediate_assign(bigint *bi, bi_signed_leaf denom);
 bigint *bi_gcd(const bigint *bi, const bigint *bi2);
 void bi_swap(bigint *bi_a, bigint *bi_b);
@@ -320,7 +328,6 @@ class Bigint
     {
         this->d.flags &= ~BIGINT_FLAG_DESTROYABLE; // Make local copy indestructible so we don't free unallocated memory
         d->flags &= ~BIGINT_FLAG_FREEABLE; // Make data not freeable in sent copy, so we can keep a reference in the local copy without it being destroyed
-        std::cout << "flags: " << this->d.flags << std::endl;
         bi_destroy(d);
     }
 
@@ -614,9 +621,65 @@ public:
         return Bigint(d);
     }
 
+    static Bigint fibonacciMod(const Bigint &fibonacci, const Bigint &mod)
+    {
+        bigint *d = bi_fibonacci_mod(&fibonacci.d, &mod.d);
+        if (d == NULL) throw out_of_memory();
+        return Bigint(d);
+    }
+
     static bool isFibonacci(const Bigint &n)
     {
         int r = bi_is_fibonacci(&n.d);
+        if (r < 0) throw out_of_memory();
+        return r;
+    }
+
+    static Bigint lucas(bi_uintmax n)
+    {
+        bigint *d = bi_lucas(n);
+        if (d == NULL) throw out_of_memory();
+        return Bigint(d);
+    }
+
+    static Bigint lucasMod(const Bigint &lucas, const Bigint &mod)
+    {
+        bigint *d = bi_lucas_mod(&lucas.d, &mod.d);
+        if (d == NULL) throw out_of_memory();
+        return Bigint(d);
+    }
+
+    bool isPrimeNaive() const
+    {
+        int r = bi_is_prime_naive(&d);
+        if (r < 0) throw out_of_memory();
+        return r;
+    }
+
+    bool isPrimeFermat(size_t base = 2) const
+    {
+        int r = bi_is_prime_fermat(&d, base);
+        if (r < 0) throw out_of_memory();
+        return r;
+    }
+
+    bool isPrimeFibonacci() const
+    {
+        int r = bi_is_prime_fibonacci(&d);
+        if (r < 0) throw out_of_memory();
+        return r;
+    }
+
+    bool isPrimeLucas() const
+    {
+        int r = bi_is_prime_lucas(&d);
+        if (r < 0) throw out_of_memory();
+        return r;
+    }
+
+    bool isPrimeSelfridge() const
+    {
+        int r = bi_is_prime_selfridge(&d);
         if (r < 0) throw out_of_memory();
         return r;
     }

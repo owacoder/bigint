@@ -3876,6 +3876,79 @@ cleanup:
     return NULL;
 }
 
+/* if mod is NULL, calculates nth Fibonacci number and returns the result in a new bigint */
+/* if mod is non-NULL, calculates nth Fibonacci number (mod `mod`) and returns the result in a new bigint */
+/* returns NULL on out of memory condition */
+/* pseudocode at http://stackoverflow.com/a/1526036/5264388 */
+bigint *bi_fibonacci_mod(const bigint *n, const bigint *mod)
+{
+    bigint *a = NULL, *b = NULL, *p = NULL, *q = NULL, *temp = NULL, *temp2 = NULL, *n_copy = NULL;
+
+    if ((a = bi_new_valueu(1)) == NULL ||
+        (b = bi_new()) == NULL ||
+        (p = bi_new()) == NULL ||
+        (q = bi_new_valueu(1)) == NULL ||
+        (n_copy = bi_copy(n)) == NULL)
+        goto cleanup;
+
+    while (bi_cmp_zero(n_copy) > 0)
+    {
+        if (n_copy->data[0] & 1)
+        {
+            if ((temp = bi_mul(a, q)) == NULL ||
+                (temp2 = bi_mul(b, q)) == NULL ||
+                (a = bi_mul_assign(a, p)) == NULL ||
+                (a = bi_add_assign(a, temp)) == NULL ||
+                (a = bi_add_assign(a, temp2)) == NULL ||
+                (b = bi_mul_assign(b, p)) == NULL ||
+                (b = bi_add_assign(b, temp)) == NULL)
+                goto cleanup;
+            bi_destroy(temp);
+            bi_destroy(temp2);
+            --n_copy->data[0];
+        }
+        else
+        {
+            if ((temp = bi_square(q)) == NULL ||
+                (temp2 = bi_mul(p, q)) == NULL ||
+                (p = bi_square_assign(p)) == NULL ||
+                (p = bi_add_assign(p, temp)) == NULL ||
+                (temp2 = bi_shl1_assign(temp2)) == NULL ||
+                (temp2 = bi_add_assign(temp2, temp)) == NULL ||
+                (n_copy = bi_shr_assign(n_copy, 1)) == NULL)
+                goto cleanup;
+            bi_swap(q, temp2);
+            bi_destroy(temp);
+            bi_destroy(temp2);
+        }
+
+        if (mod != NULL)
+        {
+            if ((a = bi_mod_assign(a, mod)) == NULL ||
+                (b = bi_mod_assign(b, mod)) == NULL ||
+                (p = bi_mod_assign(p, mod)) == NULL ||
+                (q = bi_mod_assign(q, mod)) == NULL)
+                goto cleanup;
+        }
+    }
+
+    bi_destroy(n_copy);
+    bi_destroy(a);
+    bi_destroy(p);
+    bi_destroy(q);
+    return b;
+
+cleanup:
+    bi_destroy(n_copy);
+    bi_destroy(a);
+    bi_destroy(b);
+    bi_destroy(p);
+    bi_destroy(q);
+    bi_destroy(temp);
+    bi_destroy(temp2);
+    return NULL;
+}
+
 /* returns 1 if bi is a Fibonacci number, returns 0 if not */
 /* returns -1 on out of memory condition */
 int bi_is_fibonacci(const bigint *bi)
@@ -3925,6 +3998,307 @@ cleanup:
     bi_destroy(square);
     bi_destroy(sqrt);
     return -1;
+}
+
+/* calculates nth Lucas number and returns the result in a new bigint */
+/* returns NULL on out of memory condition */
+/* pseudocode at http://stackoverflow.com/a/1526036/5264388 */
+bigint *bi_lucas(bi_uintmax n)
+{
+    bigint *a = NULL, *b = NULL, *p = NULL, *q = NULL, *temp = NULL, *temp2 = NULL;
+
+    if ((a = bi_new_valueu(1)) == NULL ||
+        (b = bi_new_valueu(2)) == NULL ||
+        (p = bi_new()) == NULL ||
+        (q = bi_new_valueu(1)) == NULL)
+        goto cleanup;
+
+    while (n > 0)
+    {
+        if (n & 1)
+        {
+            if ((temp = bi_mul(a, q)) == NULL ||
+                (temp2 = bi_mul(b, q)) == NULL ||
+                (a = bi_mul_assign(a, p)) == NULL ||
+                (a = bi_add_assign(a, temp)) == NULL ||
+                (a = bi_add_assign(a, temp2)) == NULL ||
+                (b = bi_mul_assign(b, p)) == NULL ||
+                (b = bi_add_assign(b, temp)) == NULL)
+                goto cleanup;
+            bi_destroy(temp);
+            bi_destroy(temp2);
+            --n;
+        }
+        else
+        {
+            if ((temp = bi_square(q)) == NULL ||
+                (temp2 = bi_mul(p, q)) == NULL ||
+                (p = bi_square_assign(p)) == NULL ||
+                (p = bi_add_assign(p, temp)) == NULL ||
+                (temp2 = bi_shl1_assign(temp2)) == NULL ||
+                (temp2 = bi_add_assign(temp2, temp)) == NULL)
+                goto cleanup;
+            bi_swap(q, temp2);
+            bi_destroy(temp);
+            bi_destroy(temp2);
+            n >>= 1;
+        }
+    }
+
+    bi_destroy(a);
+    bi_destroy(p);
+    bi_destroy(q);
+    return b;
+
+cleanup:
+    bi_destroy(a);
+    bi_destroy(b);
+    bi_destroy(p);
+    bi_destroy(q);
+    bi_destroy(temp);
+    bi_destroy(temp2);
+    return NULL;
+}
+
+/* if mod is NULL, calculates nth Lucas number and returns the result in a new bigint */
+/* if mod is non-NULL, calculates nth Lucas number (mod `mod`) and returns the result in a new bigint */
+/* returns NULL on out of memory condition */
+/* pseudocode at http://stackoverflow.com/a/1526036/5264388 */
+bigint *bi_lucas_mod(const bigint *n, const bigint *mod)
+{
+    bigint *a = NULL, *b = NULL, *p = NULL, *q = NULL, *temp = NULL, *temp2 = NULL, *n_copy = NULL;
+
+    if ((a = bi_new_valueu(1)) == NULL ||
+        (b = bi_new_valueu(2)) == NULL ||
+        (p = bi_new()) == NULL ||
+        (q = bi_new_valueu(1)) == NULL ||
+        (n_copy = bi_copy(n)) == NULL)
+        goto cleanup;
+
+    while (bi_cmp_zero(n_copy) > 0)
+    {
+        if (n_copy->data[0] & 1)
+        {
+            if ((temp = bi_mul(a, q)) == NULL ||
+                (temp2 = bi_mul(b, q)) == NULL ||
+                (a = bi_mul_assign(a, p)) == NULL ||
+                (a = bi_add_assign(a, temp)) == NULL ||
+                (a = bi_add_assign(a, temp2)) == NULL ||
+                (b = bi_mul_assign(b, p)) == NULL ||
+                (b = bi_add_assign(b, temp)) == NULL)
+                goto cleanup;
+            bi_destroy(temp);
+            bi_destroy(temp2);
+            --n_copy->data[0];
+        }
+        else
+        {
+            if ((temp = bi_square(q)) == NULL ||
+                (temp2 = bi_mul(p, q)) == NULL ||
+                (p = bi_square_assign(p)) == NULL ||
+                (p = bi_add_assign(p, temp)) == NULL ||
+                (temp2 = bi_shl1_assign(temp2)) == NULL ||
+                (temp2 = bi_add_assign(temp2, temp)) == NULL ||
+                (n_copy = bi_shr_assign(n_copy, 1)) == NULL)
+                goto cleanup;
+            bi_swap(q, temp2);
+            bi_destroy(temp);
+            bi_destroy(temp2);
+        }
+
+        if (mod != NULL)
+        {
+            if ((a = bi_mod_assign(a, mod)) == NULL ||
+                (b = bi_mod_assign(b, mod)) == NULL ||
+                (p = bi_mod_assign(p, mod)) == NULL ||
+                (q = bi_mod_assign(q, mod)) == NULL)
+                goto cleanup;
+        }
+    }
+
+    bi_destroy(n_copy);
+    bi_destroy(a);
+    bi_destroy(p);
+    bi_destroy(q);
+    return b;
+
+cleanup:
+    bi_destroy(n_copy);
+    bi_destroy(a);
+    bi_destroy(b);
+    bi_destroy(p);
+    bi_destroy(q);
+    bi_destroy(temp);
+    bi_destroy(temp2);
+    return NULL;
+}
+
+/* returns 1 if bi is a prime number, returns 0 if not */
+/* returns -1 on out of memory condition */
+/* note that this function may have a very long running time for large inputs */
+int bi_is_prime_naive(const bigint *bi)
+{
+    const int low_primes[] = {  2,   3,   5,   7,  11,  13,  17,  19,  23,  29,
+                               31,  37,  41,  43,  47,  53,  59,  61,  67,  71,
+                               73,  79,  83,  89,  97, 101, 103, 107, 109, 113,
+                              127, 131, 137, 139, 149, 151, 157, 163, 167, 173,
+                              179, 181, 191, 193, 197, 199};
+    const int first_test = 203; // first number fitting `6k-1` after final prime in above list
+
+    if (bi_is_negative(bi) || bi_is_zero(bi))
+        return 0;
+    else if (bi_cmp_immu(bi, 3) <= 0)
+        return 1;
+    else
+    {
+        // first check against a limited number of known primes
+        for (size_t i = 0; i < sizeof(low_primes)/sizeof(*low_primes) && bi_cmp_immu(bi, low_primes[i]*low_primes[i]) >= 0; ++i)
+        {
+            int success;
+            bi_signed_leaf mod_result = bi_mod_immediate(bi, low_primes[i], &success);
+            if (!success)
+                return -1;
+            else if (mod_result == 0)
+                return 0; // not prime if divisible by number in list
+        }
+
+        // then check against 6k+-1, where k is less than sqrt(bi)
+        bigint *k = bi_new_valueu(first_test);
+        bigint *sqrt = bi_sqrt(bi);
+        if (k == NULL || sqrt == NULL || (sqrt = bi_add_immediate_assign(sqrt, 1)) == NULL)
+            return -1;
+
+        while (bi_cmp(k, sqrt) <= 0)
+        {
+            // test 6k-1 first
+            bigint *b = bi_mod(bi, k);
+            if (b == NULL)
+                goto cleanup;
+
+            int zero = bi_is_zero(b);
+            bi_destroy(b);
+
+            if (zero)
+                return 0;
+
+            // add 2, so we can test 6k+1
+            if ((k = bi_add_immediate_assign(k, 2)) == NULL)
+                goto cleanup;
+
+            // test 6k+1 next
+            b = bi_mod(bi, k);
+            if (b == NULL)
+                goto cleanup;
+
+            zero = bi_is_zero(b);
+            bi_destroy(b);
+
+            if (zero)
+                return 0;
+
+            // add 4 to k, to calculate 6(k+1)-1
+            if ((k = bi_add_immediate_assign(k, 4)) == NULL)
+                goto cleanup;
+        }
+
+        // must be prime!
+        return 1;
+
+cleanup:
+        bi_destroy(k);
+        bi_destroy(sqrt);
+        return -1;
+    }
+}
+
+/* returns 1 if bi is a probable prime number, returns 0 if not */
+/* returns -1 on out of memory condition */
+int bi_is_prime_fermat(const bigint *bi, size_t base)
+{
+    bigint *pbase = bi_new_valuelu(base);
+    bigint *bi_m_1 = bi_sub_immediate(bi, 1);
+    bigint *result = bi_large_exp_mod(pbase, bi_m_1, bi);
+
+    if (pbase == NULL || bi_m_1 == NULL || result == NULL)
+        goto cleanup;
+
+    int return_value = bi_is_one(result);
+    bi_destroy(pbase);
+    bi_destroy(bi_m_1);
+    bi_destroy(result);
+
+    return return_value;
+
+cleanup:
+    bi_destroy(pbase);
+    bi_destroy(bi_m_1);
+    bi_destroy(result);
+    return -1;
+}
+
+/* returns 1 if bi is a probable prime number, returns 0 if not */
+/* returns -1 on out of memory condition */
+int bi_is_prime_fibonacci(const bigint *bi)
+{
+    bigint *bi_p_1 = bi_add_immediate(bi, 1);
+    bigint *result = bi_fibonacci_mod(bi_p_1, NULL);
+
+    if (bi_p_1 == NULL || result == NULL || (result = bi_mod_assign(result, bi)) == NULL)
+        goto cleanup;
+
+    int return_value = bi_is_zero(result);
+    bi_destroy(bi_p_1);
+    bi_destroy(result);
+
+    return return_value;
+
+cleanup:
+    bi_destroy(bi_p_1);
+    bi_destroy(result);
+    return -1;
+}
+
+/* returns 1 if bi is a probable prime number, returns 0 if not */
+/* returns -1 on out of memory condition */
+int bi_is_prime_lucas(const bigint *bi)
+{
+    bigint *bi_p_1 = bi_add_immediate(bi, 1);
+    bigint *result = bi_lucas_mod(bi_p_1, NULL);
+
+    if (bi_p_1 == NULL || result == NULL || (result = bi_mod_assign(result, bi)) == NULL)
+        goto cleanup;
+
+    int return_value = bi_is_zero(result);
+    bi_destroy(bi_p_1);
+    bi_destroy(result);
+
+    return return_value;
+
+cleanup:
+    bi_destroy(bi_p_1);
+    bi_destroy(result);
+    return -1;
+}
+
+/* returns 1 if bi is a probable prime number, returns 0 if not */
+/* returns -1 on out of memory condition */
+int bi_is_prime_selfridge(const bigint *bi)
+{
+    int success;
+    bi_signed_leaf result = bi_mod_immediate(bi, 5, &success);
+
+    if (!success)
+        return -1;
+
+    // bi must be odd, and equal to +-2 mod 5
+    if ((result != 2 && result != 3) || (bi->data[0] & 1) == 0)
+        return 0;
+
+    success = bi_is_prime_fermat(bi, 2);
+    if (success == 1)
+        success = bi_is_prime_fibonacci(bi);
+
+    return success;
 }
 
 /* raises bi to the nth power and returns the result in a new bigint */
@@ -4612,14 +4986,25 @@ bigint *bi_divmod_immediate_assign(bigint *bi, bi_signed_leaf denom, bi_signed_l
     return bi_divmod_immediate_internal(bi, bi, denom, &q, r);
 }
 
-/* divides bi by denom and returns the remainder in a new bigint */
+/* divides bi by denom and returns the remainder */
 /* returns 0 on out of memory or divide by zero; the parameters are not destroyed */
-bi_signed_leaf bi_mod_immediate(const bigint *bi, bi_signed_leaf denom)
+/* success is set to 1 on successful operation, 0 if out of memory */
+bi_signed_leaf bi_mod_immediate(const bigint *bi, bi_signed_leaf denom, int *success)
 {
     bigint *q;
     bi_signed_leaf r;
-    if (bi_divmod_immediate(bi, denom, &q, &r) == NULL) return 0;
-    bi_destroy(q);
+    if (bi_divmod_immediate(bi, denom, &q, &r) == NULL)
+    {
+        if (success)
+            *success = 0;
+        return 0;
+    }
+    else
+    {
+        if (success)
+            *success = 1;
+        bi_destroy(q);
+    }
     return r;
 }
 

@@ -1,6 +1,5 @@
 #include "bigfrac.h"
 #include "general.h"
-#include "io.h"
 
 #include <stdlib.h>
 #include <memory.h>
@@ -441,7 +440,7 @@ bigfrac *bf_div_immediate_assign(bigfrac *bf, bi_signed_leaf val)
 
 bigfrac *bf_reduce(bigfrac *bf)
 {
-    bigint *gcd;
+    bigint *gcd = NULL;
     size_t negative = bi_is_negative(bf->n) != bi_is_negative(bf->d);
 
     if (bi_is_zero(bf->n) || bi_is_zero(bf->d))
