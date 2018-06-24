@@ -138,6 +138,18 @@ bi_signed_leaf bi_bit(const bigint *bi, size_t bit)
     return (bi->data[word] >> (bit % BIGINT_LEAFBITS)) & 1;
 }
 
+/* returns new bit value on success */
+/* returns -1 if specified bit is out of range */
+int bi_set_bit(bigint *bi, size_t bit, int value)
+{
+    size_t word = bit / BIGINT_LEAFBITS;
+    if (word >= bi->size)
+        return -1;
+    bit %= BIGINT_LEAFBITS;
+    bi->data[word] = (bi->data[word] & ~((bi_leaf) 1 << bit)) | ((bi_leaf) (value != 0) << bit);
+    return value != 0;
+}
+
 /* returns number of leaves used in bi */
 size_t bi_used(const bigint *bi)
 {
@@ -3739,6 +3751,7 @@ bigint *bi_sqrt(const bigint *bi)
     bigint *val = bi_copy(bi);
     bigint *root = bi_new();
     bigint *bit;
+    bigint *temp = NULL;
 
     if (sz == 0 || bi_is_negative(bi))
         return root;
@@ -3754,7 +3767,7 @@ bigint *bi_sqrt(const bigint *bi)
 
     while (!bi_is_zero(bit))
     {
-        bigint *temp = bi_add(root, bit);
+        temp = bi_add(root, bit);
         if (temp == NULL) goto cleanup;
 
         if (bi_cmp_mag(val, temp) >= 0)
@@ -3765,8 +3778,9 @@ bigint *bi_sqrt(const bigint *bi)
         }
         else
             if ((root = bi_shr_assign(root, 1)) == NULL) goto cleanup;
-        bi_destroy(temp);
+
         if ((bit = bi_shr_assign(bit, 2)) == NULL) goto cleanup;
+        bi_destroy(temp);
     }
 
     bi_destroy(val);
@@ -3777,6 +3791,7 @@ cleanup:
     bi_destroy(root);
     bi_destroy(val);
     bi_destroy(bit);
+    bi_destroy(temp);
     return NULL;
 }
 
@@ -3796,6 +3811,64 @@ bigint *bi_sqrt_assign(bigint *bi)
         bi_destroy(bi);
         return NULL;
     }
+}
+
+/* generates a random number (from provided source) in the range [0, 2^(bits+1)) and returns the result in a new bigint */
+/* returns NULL on out of memory condition */
+bigint *bi_randgen(size_t bits, bi_rand_source source)
+{
+    bigint *b = bi_new_sized(max(bits/BIGINT_LEAFBITS + 1, BIGINT_MINLEAFS));
+
+    if (b == NULL)
+        return NULL;
+
+    switch (source)
+    {
+        case bi_rand_stdrand:
+            for (size_t i = 0; i < bits; ++i)
+            {
+                int max_rand = RAND_MAX - RAND_MAX % 2;
+                int mrand;
+
+                do mrand = rand(); while(mrand >= max_rand);
+
+                if (bi_set_bit(b, i, mrand & 1) < 0)
+                    return NULL;
+            }
+            break;
+    }
+
+    return b;
+}
+
+/* generates a random number (from provided source) in the range [min, max] and returns the result in a new bigint */
+/* returns NULL on out of memory condition */
+bigint *bi_randgen_range(const bigint *min, const bigint *max, bi_rand_source source)
+{
+    bigint *diff = bi_sub(max, min), *rnd = NULL;
+    if (diff == NULL)
+        goto cleanup;
+
+    size_t bits_needed = bi_bitcount(diff);
+
+    do
+    {
+        bi_destroy(rnd);
+        rnd = bi_randgen(bits_needed, source);
+        if (rnd == NULL)
+            goto cleanup;
+    } while (bi_cmp(rnd, diff) > 0);
+
+    if ((rnd = bi_add_assign(rnd, min)) == NULL)
+        goto cleanup;
+
+    bi_destroy(diff);
+    return rnd;
+
+cleanup:
+    bi_destroy(diff);
+    bi_destroy(rnd);
+    return NULL;
 }
 
 /* calculates factorial of n and returns the result in a new bigint */
@@ -4135,15 +4208,13 @@ cleanup:
 
 /* returns 1 if bi is a prime number, returns 0 if not */
 /* returns -1 on out of memory condition */
-/* note that this function may have a very long running time for large inputs */
-int bi_is_prime_naive(const bigint *bi)
+int bi_is_prime_low_divisibility_test(const bigint *bi)
 {
     const int low_primes[] = {  2,   3,   5,   7,  11,  13,  17,  19,  23,  29,
                                31,  37,  41,  43,  47,  53,  59,  61,  67,  71,
                                73,  79,  83,  89,  97, 101, 103, 107, 109, 113,
                               127, 131, 137, 139, 149, 151, 157, 163, 167, 173,
                               179, 181, 191, 193, 197, 199};
-    const int first_test = 203; // first number fitting `6k-1` after final prime in above list
 
     if (bi_is_negative(bi) || bi_is_zero(bi))
         return 0;
@@ -4162,53 +4233,67 @@ int bi_is_prime_naive(const bigint *bi)
                 return 0; // not prime if divisible by number in list
         }
 
-        // then check against 6k+-1, where k is less than sqrt(bi)
-        bigint *k = bi_new_valueu(first_test);
-        bigint *sqrt = bi_sqrt(bi);
-        if (k == NULL || sqrt == NULL || (sqrt = bi_add_immediate_assign(sqrt, 1)) == NULL)
-            return -1;
+        return 1; // prime so far...
+    }
+}
 
-        while (bi_cmp(k, sqrt) <= 0)
-        {
-            // test 6k-1 first
-            bigint *b = bi_mod(bi, k);
-            if (b == NULL)
-                goto cleanup;
+/* returns 1 if bi is a prime number, returns 0 if not */
+/* returns -1 on out of memory condition */
+/* note that this function may have a very long running time for large inputs */
+int bi_is_prime_naive(const bigint *bi)
+{
+    const int first_test = 203; // first number fitting `6k-1` after final prime in bi_is_prime_low_divisibility_test()
+    int result = bi_is_prime_low_divisibility_test(bi);
 
-            int zero = bi_is_zero(b);
-            bi_destroy(b);
+    if (result != 1)
+        return result;
 
-            if (zero)
-                return 0;
+    // then check against 6k+-1, where k is less than sqrt(bi)
+    bigint *k = bi_new_valueu(first_test);
+    bigint *sqrt = bi_sqrt(bi);
+    if (k == NULL || sqrt == NULL || (sqrt = bi_add_immediate_assign(sqrt, 1)) == NULL)
+        return -1;
 
-            // add 2, so we can test 6k+1
-            if ((k = bi_add_immediate_assign(k, 2)) == NULL)
-                goto cleanup;
+    while (bi_cmp(k, sqrt) <= 0)
+    {
+        // test 6k-1 first
+        bigint *b = bi_mod(bi, k);
+        if (b == NULL)
+            goto cleanup;
 
-            // test 6k+1 next
-            b = bi_mod(bi, k);
-            if (b == NULL)
-                goto cleanup;
+        int zero = bi_is_zero(b);
+        bi_destroy(b);
 
-            zero = bi_is_zero(b);
-            bi_destroy(b);
+        if (zero)
+            return 0;
 
-            if (zero)
-                return 0;
+        // add 2, so we can test 6k+1
+        if ((k = bi_add_immediate_assign(k, 2)) == NULL)
+            goto cleanup;
 
-            // add 4 to k, to calculate 6(k+1)-1
-            if ((k = bi_add_immediate_assign(k, 4)) == NULL)
-                goto cleanup;
-        }
+        // test 6k+1 next
+        b = bi_mod(bi, k);
+        if (b == NULL)
+            goto cleanup;
 
-        // must be prime!
-        return 1;
+        zero = bi_is_zero(b);
+        bi_destroy(b);
+
+        if (zero)
+            return 0;
+
+        // add 4 to k, to calculate 6(k+1)-1
+        if ((k = bi_add_immediate_assign(k, 4)) == NULL)
+            goto cleanup;
+    }
+
+    // must be prime!
+    return 1;
 
 cleanup:
-        bi_destroy(k);
-        bi_destroy(sqrt);
-        return -1;
-    }
+    bi_destroy(k);
+    bi_destroy(sqrt);
+    return -1;
 }
 
 /* returns 1 if bi is a probable prime number, returns 0 if not */
@@ -4299,6 +4384,74 @@ int bi_is_prime_selfridge(const bigint *bi)
         success = bi_is_prime_fibonacci(bi);
 
     return success;
+}
+
+/* returns 1 if bi is a probable prime number, returns 0 if not */
+/* returns -1 on out of memory condition */
+/* https://en.wikipedia.org/wiki/Miller%E2%80%93Rabin_primality_test */
+int bi_is_prime_miller_rabin(const bigint *bi, size_t k, bi_rand_source source)
+{
+    int result = bi_is_prime_low_divisibility_test(bi);
+
+    if (result != 1)
+        return result;
+
+    bigint *bi_m_1 = bi_sub_immediate(bi, 1),
+            *bi_m_2 = bi_sub_immediate(bi, 2),
+            *x = NULL,
+            *d = NULL,
+            two = bi_two();
+    if (bi_m_1 == NULL || bi_m_2 == NULL)
+        goto cleanup;
+
+    size_t r = bi_trailing_zeroes(bi_m_1);
+    if ((d = bi_shr(bi_m_1, r)) == NULL)
+        goto cleanup;
+
+    for (; k > 0; --k)
+    {
+        x = bi_randgen_range(&two, bi_m_2, source);
+        if (x == NULL) goto cleanup;
+
+        x = bi_large_exp_mod_assign(x, d, bi);
+        if (x == NULL) goto cleanup;
+
+        // is x congruent to +-1 (mod bi)?
+        if (!bi_is_one(x) && bi_cmp(x, bi_m_1) != 0)
+        {
+            for (size_t i = 1; i < r; ++i)
+            {
+                if ((x = bi_exp_mod_assign(x, 2, bi)) == NULL)
+                    goto cleanup;
+
+                if (bi_is_one(x))
+                {
+                    result = 0; // not prime
+                    goto done;
+                }
+                else if (bi_cmp(x, bi_m_1) == 0)
+                    break;
+            }
+        }
+
+        bi_destroy(x); x = NULL;
+    }
+
+    result = 1; // probably prime
+
+done:
+    bi_destroy(bi_m_1);
+    bi_destroy(bi_m_2);
+    bi_destroy(d);
+    bi_destroy(x);
+    return result;
+
+cleanup:
+    bi_destroy(bi_m_1);
+    bi_destroy(bi_m_2);
+    bi_destroy(d);
+    bi_destroy(x);
+    return -1;
 }
 
 /* raises bi to the nth power and returns the result in a new bigint */

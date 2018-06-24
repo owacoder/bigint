@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <limits.h>
+#include "general.h"
 
 #ifndef BIGINT_WORD_SIZE
 #if SIZE_MAX == 0xffffffffffffffff // Assume it's a 64-bit platform
@@ -162,6 +163,7 @@ bigint *bi_assign(bigint *bi, bi_signed_leaf value);
 bigint *bi_assignl(bigint *bi, bi_intmax value);
 bigint *bi_assignlu(bigint *bi, bi_uintmax value);
 bi_signed_leaf bi_bit(const bigint *bi, size_t bit);
+int bi_set_bit(bigint *bi, size_t bit, int value);
 size_t bi_used(const bigint *bi);
 bi_leaf bi_to_intu(const bigint *bi);
 bi_signed_leaf bi_to_int(const bigint *bi);
@@ -186,6 +188,14 @@ float bi_to_float(const bigint *bi);
 double bi_to_double(const bigint *bi);
 long double bi_to_doublel(const bigint *bi);
 #endif // BIGINT_ENABLE_LIBMATH
+
+typedef enum
+{
+    bi_rand_stdrand
+} bi_rand_source;
+
+bigint *bi_randgen(size_t bits, bi_rand_source source);
+bigint *bi_randgen_range(const bigint *min, const bigint *max, bi_rand_source source);
 
 bigint *bi_clear(bigint *bi);
 int bi_is_negative(const bigint *bi);
@@ -261,11 +271,13 @@ bigint *bi_fibonacci_mod(const bigint *n, const bigint *mod);
 int bi_is_fibonacci(const bigint *bi);
 bigint *bi_lucas(bi_uintmax n);
 bigint *bi_lucas_mod(const bigint *n, const bigint *mod);
+int bi_is_prime_low_divisibility_test(const bigint *bi);
 int bi_is_prime_naive(const bigint *bi);
 int bi_is_prime_fermat(const bigint *bi, size_t base);
 int bi_is_prime_fibonacci(const bigint *bi);
 int bi_is_prime_lucas(const bigint *bi);
 int bi_is_prime_selfridge(const bigint *bi);
+int bi_is_prime_miller_rabin(const bigint *bi, size_t k, bi_rand_source source);
 bigint *bi_uexp(const bigint *bi, bi_uintmax n);
 bigint *bi_uexp_assign(bigint *bi, bi_uintmax n);
 bigint *bi_exp(const bigint *bi, bi_intmax n);
@@ -335,6 +347,7 @@ public:
     struct error {};
     struct out_of_memory: public error {};
     struct division_by_zero: public error {};
+    struct prime_gen_failed: public error {};
 
     const bigint *native_handle() const {return &d;}
     bigint *native_handle() {return &d;}
@@ -607,6 +620,46 @@ public:
     }
     Bigint squareRooted() const {return Bigint(*this).squareRoot();}
 
+    static Bigint rand(size_t bits, bi_rand_source source)
+    {
+        bigint *d = bi_randgen(bits, source);
+        if (d == NULL) throw out_of_memory();
+        return Bigint(d);
+    }
+
+    static Bigint rand(const Bigint &min, const Bigint &max, bi_rand_source source)
+    {
+        bigint *d = bi_randgen_range(&min.d, &max.d, source);
+        if (d == NULL) throw out_of_memory();
+        return Bigint(d);
+    }
+
+    static Bigint generateProbablePrime(size_t bits, size_t k, bi_rand_source source)
+    {
+        size_t tries = 100 * Bigint((bi_intmax) bits).log2();
+
+        while (tries-- > 0)
+        {
+            bigint *d = bi_randgen(bits, source);
+            if (d == NULL) throw out_of_memory();
+
+            d->data[0] |= 1;
+
+            if (bi_cmp_immu(d, 3) > 0)
+            {
+                int result = bi_is_prime_miller_rabin(d, k, source);
+                if (result < 0)
+                    throw out_of_memory();
+                else if (result == 1)
+                    return Bigint(d);
+            }
+
+            bi_destroy(d);
+        }
+
+        throw prime_gen_failed();
+    }
+
     static Bigint factorial(bi_uintmax n)
     {
         bigint *d = bi_fact(n);
@@ -715,6 +768,40 @@ public:
     Bigint poweredMod(bi_intmax n, const Bigint &mod) const {return Bigint(*this).powerMod(n, mod);}
     Bigint poweredMod(const Bigint &n, const Bigint &mod) const {return Bigint(*this).powerMod(n, mod);}
 
+    /* TODO: Newton/Raphson division is currently very slow */
+    Bigint newtonRaphson(const Bigint &other)
+    {
+        size_t k = log2()+1 + other.log2()+1;
+
+        Bigint x(other.log2()+1), k2(2);
+
+        k2 <<= k;
+
+#if 0
+        Bigint last, lastlast;
+        while (true)
+        {
+            x *= k2 - x * other;
+            x >>= k;
+            if (x == last || x == lastlast)
+                break;
+            lastlast.swap(last);
+            last = x;
+        }
+#else
+        for (size_t i = 0; i < size_t(other.log2()+1); ++i)
+            x = (x * (k2 - x * other)) >> k;
+#endif
+
+        x *= *this;
+        x >>= k;
+
+        if (*this - (x * other) >= other)
+            ++x;
+
+        return x;
+    }
+
     Bigint &divideBy(const Bigint &other)
     {
         if (bi_is_zero(&other.d)) throw division_by_zero();
@@ -781,7 +868,7 @@ public:
         return str;
     }
 
-    void swap(Bigint &other) {std::swap(d, other.d);}
+    void swap(Bigint &other) {bi_swap(&d, &other.d);}
 
     friend bool operator<(const Bigint &lhs, const Bigint &rhs) {return lhs.compare(rhs) < 0;}
     friend bool operator>(const Bigint &lhs, const Bigint &rhs) {return lhs.compare(rhs) > 0;}
