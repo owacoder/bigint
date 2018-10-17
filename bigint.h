@@ -191,7 +191,8 @@ long double bi_to_doublel(const bigint *bi);
 
 typedef enum
 {
-    bi_rand_stdrand
+    bi_rand_stdrand,
+    bi_crypto_rand
 } bi_rand_source;
 
 bigint *bi_randgen(size_t bits, bi_rand_source source);
@@ -288,6 +289,12 @@ bigint *bi_exp_mod(const bigint *bi, bi_intmax n, const bigint *mod);
 bigint *bi_exp_mod_assign(bigint *bi, bi_intmax n, const bigint *mod);
 bigint *bi_large_exp_mod(const bigint *bi, const bigint *n, const bigint *mod);
 bigint *bi_large_exp_mod_assign(bigint *bi, const bigint *n, const bigint *mod);
+int bi_montgomery_init(const bigint *modulus, size_t *bits, bigint **r, bigint **r_recip, bigint **k, bigint **mask, bigint **mont_one);
+bigint *bi_convert_to_montgomery(const bigint *value, size_t mont_bits, const bigint *modulus);
+bigint *bi_convert_from_montgomery(const bigint *value, const bigint *mont_r_recip, const bigint *modulus);
+bigint *bi_montgomery_mul(const bigint *a, const bigint *b, const bigint *modulus, size_t mont_bits, const bigint *mont_k, const bigint *mont_mask);
+bigint *bi_montgomery_pow(const bigint *a, const bigint *b, const bigint *modulus, size_t mont_bits, const bigint *mont_k, const bigint *mont_mask, const bigint *mont_one);
+void bi_montgomery_deinit(bigint *r, bigint *r_recip, bigint *k, bigint *mask, bigint *mont_one);
 bigint *bi_divmod(const bigint *bi, const bigint *bi2, bigint **q, bigint **r);
 bigint *bi_divmod_assign(bigint *bi, const bigint *bi2, bigint **r);
 bigint *bi_div(const bigint *bi, const bigint *bi2);
@@ -313,6 +320,7 @@ bigint *bi_div_immediate_assign(bigint *bi, bi_signed_leaf denom);
 bi_signed_leaf bi_mod_immediate(const bigint *bi, bi_signed_leaf denom, int *success);
 bigint *bi_mod_immediate_assign(bigint *bi, bi_signed_leaf denom);
 bigint *bi_gcd(const bigint *bi, const bigint *bi2);
+bigint *bi_modinv(const bigint *a, const bigint *m, int *not_invertible);
 void bi_swap(bigint *bi_a, bigint *bi_b);
 int bi_sscan(const char *str, bigint *bi, size_t base);
 int bi_sscan_n(const char *str, size_t len, bigint *bi, size_t base);
@@ -636,9 +644,7 @@ public:
 
     static Bigint generateProbablePrime(size_t bits, size_t k, bi_rand_source source)
     {
-        size_t tries = 100 * Bigint((bi_intmax) bits).log2();
-
-        while (tries-- > 0)
+        while (1)
         {
             bigint *d = bi_randgen(bits, source);
             if (d == NULL) throw out_of_memory();
@@ -656,8 +662,6 @@ public:
 
             bi_destroy(d);
         }
-
-        throw prime_gen_failed();
     }
 
     static Bigint factorial(bi_uintmax n)

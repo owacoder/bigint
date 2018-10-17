@@ -3814,7 +3814,7 @@ bigint *bi_sqrt_assign(bigint *bi)
 }
 
 /* generates a random number (from provided source) in the range [0, 2^(bits+1)) and returns the result in a new bigint */
-/* returns NULL on out of memory condition */
+/* returns NULL on out of memory condition or failure to supply random bits */
 bigint *bi_randgen(size_t bits, bi_rand_source source)
 {
     bigint *b = bi_new_sized(max(bits/BIGINT_LEAFBITS + 1, BIGINT_MINLEAFS));
@@ -3824,6 +3824,31 @@ bigint *bi_randgen(size_t bits, bi_rand_source source)
 
     switch (source)
     {
+        case bi_crypto_rand:
+#if defined(__linux__) || defined(__linux)
+        {
+            FILE *dev_random = fopen("/dev/urandom", "rb");
+            if (!dev_random)
+            {
+                bi_destroy(b);
+                return NULL;
+            }
+
+            for (size_t i = 0; i < bits; ++i)
+            {
+                int mrand = fgetc(dev_random);
+
+                if (bi_set_bit(b, i, mrand & 1) < 0)
+                {
+                    fclose(dev_random);
+                    return NULL;
+                }
+            }
+
+            fclose(dev_random);
+            break;
+        }
+#endif
         case bi_rand_stdrand:
             for (size_t i = 0; i < bits; ++i)
             {
@@ -4391,6 +4416,9 @@ int bi_is_prime_selfridge(const bigint *bi)
 /* https://en.wikipedia.org/wiki/Miller%E2%80%93Rabin_primality_test */
 int bi_is_prime_miller_rabin(const bigint *bi, size_t k, bi_rand_source source)
 {
+    size_t mont_bits;
+    bigint *mont_r = NULL, *mont_r_recip = NULL, *mont_k = NULL, *mont_mask = NULL, *mont_one = NULL;
+
     int result = bi_is_prime_low_divisibility_test(bi);
 
     if (result != 1)
@@ -4408,32 +4436,53 @@ int bi_is_prime_miller_rabin(const bigint *bi, size_t k, bi_rand_source source)
     if ((d = bi_shr(bi_m_1, r)) == NULL)
         goto cleanup;
 
+    if (bi_montgomery_init(bi, &mont_bits, &mont_r, &mont_r_recip, &mont_k, &mont_mask, &mont_one))
+        goto cleanup;
+
     for (; k > 0; --k)
     {
         x = bi_randgen_range(&two, bi_m_2, source);
         if (x == NULL) goto cleanup;
 
-        x = bi_large_exp_mod_assign(x, d, bi);
-        if (x == NULL) goto cleanup;
+        x->data[0] |= 1; /* no odd number (our supposed prime) is divisible by an even number, so make the witness odd */
+
+        /* Montgomery exponentiation of x^d mod bi */
+        bigint *mont_x = bi_convert_to_montgomery(x, mont_bits, bi);
+        if (mont_x == NULL)
+            goto cleanup;
+
+        bi_destroy(x);
+        x = bi_montgomery_pow(mont_x, d, bi, mont_bits, mont_k, mont_mask, mont_one);
+        bi_destroy(mont_x);
+        if (x == NULL)
+            goto cleanup;
+
+        mont_x = x;
+        x = bi_convert_from_montgomery(mont_x, mont_r_recip, bi);
+        bi_destroy(mont_x);
+        if (x == NULL)
+            goto cleanup;
+        /* end of exponentiation */
+
+        if (bi_is_one(x) || bi_cmp(x, bi_m_1) == 0)
+            goto next_k;
 
         // is x congruent to +-1 (mod bi)?
-        if (!bi_is_one(x) && bi_cmp(x, bi_m_1) != 0)
+        for (size_t i = 1; i < r; ++i)
         {
-            for (size_t i = 1; i < r; ++i)
-            {
-                if ((x = bi_exp_mod_assign(x, 2, bi)) == NULL)
-                    goto cleanup;
+            if ((x = bi_exp_mod_assign(x, 2, bi)) == NULL)
+                goto cleanup;
 
-                if (bi_is_one(x))
-                {
-                    result = 0; // not prime
-                    goto done;
-                }
-                else if (bi_cmp(x, bi_m_1) == 0)
-                    break;
-            }
+            if (bi_is_one(x)) /* shortcut to prevent computation of the loop over and over (e.g. 1*1 mod anything is still 1) */
+                break;
+            else if (bi_cmp(x, bi_m_1) == 0)
+                goto next_k;
         }
 
+        result = 0;
+        goto done;
+
+next_k:
         bi_destroy(x); x = NULL;
     }
 
@@ -4444,6 +4493,7 @@ done:
     bi_destroy(bi_m_2);
     bi_destroy(d);
     bi_destroy(x);
+    bi_montgomery_deinit(mont_r, mont_r_recip, mont_k, mont_mask, mont_one);
     return result;
 
 cleanup:
@@ -4451,6 +4501,7 @@ cleanup:
     bi_destroy(bi_m_2);
     bi_destroy(d);
     bi_destroy(x);
+    bi_montgomery_deinit(mont_r, mont_r_recip, mont_k, mont_mask, mont_one);
     return -1;
 }
 
@@ -4569,10 +4620,8 @@ bigint *bi_exp_mod(const bigint *bi, bi_intmax n, const bigint *mod)
 /* returns NULL and destroys bi on out of memory condition */
 bigint *bi_exp_mod_assign(bigint *bi, bi_intmax n, const bigint *mod)
 {
-    bigint *result;
     if (n < 0) return bi_clear(bi);
-    if ((result = bi_copy(bi)) == NULL) return NULL;
-    return bi_uexp_mod_assign(result, n, mod);
+    return bi_uexp_mod_assign(bi, n, mod);
 }
 
 /* raises bi to the nth power and returns the result (using modulo `mod`) in a new bigint */
@@ -4621,6 +4670,160 @@ bigint *bi_large_exp_mod_assign(bigint *bi, const bigint *n, const bigint *mod)
     bi_swap(bi, y);
     bi_destroy(y);
     return bi;
+}
+
+/* computes values for Montgomery multiplication */
+/* returns 0 on success, 1 on failure, and no arguments are assigned to on failure */
+/* see https://www.nayuki.io/page/montgomery-reduction-algorithm */
+int bi_montgomery_init(const bigint *modulus, size_t *bits, bigint **r, bigint **r_recip, bigint **k, bigint **mask, bigint **mont_one)
+{
+    size_t bits_ = (bi_bitcount(modulus) / 8 + 1) * 8;
+    bigint *r_ = bi_new(), *r_recip_ = NULL, *k_ = NULL, *mask_ = NULL, *mont_one_ = NULL;
+
+    if ((modulus->data[0] & 1) == 0 ||
+        bi_cmp_immu(modulus, 3) <= 0 ||
+        (r_ = bi_assignu(r_, 1)) == NULL ||
+        (r_ = bi_shl_assign(r_, bits_)) == NULL ||
+        (mask_ = bi_sub_immediate(r_, 1)) == NULL ||
+        (r_recip_ = bi_modinv(r_, modulus, NULL)) == NULL ||
+        (k_ = bi_mul(r_, r_recip_)) == NULL ||
+        (k_ = bi_sub_immediate_assign(k_, 1)) == NULL ||
+        (k_ = bi_div_assign(k_, modulus)) == NULL ||
+        (mont_one_ = bi_mod(r_, modulus)) == NULL)
+        goto cleanup;
+
+    if (bits)
+        *bits = bits_;
+
+    if (r)
+        *r = r_;
+    else
+        bi_destroy(r_);
+
+    if (r_recip)
+        *r_recip = r_recip_;
+    else
+        bi_destroy(r_recip_);
+
+    if (k)
+        *k = k_;
+    else
+        bi_destroy(k_);
+
+    if (mask)
+        *mask = mask_;
+    else
+        bi_destroy(mask_);
+
+    if (mont_one)
+        *mont_one = mont_one_;
+    else
+        bi_destroy(mont_one_);
+
+    return 0;
+
+cleanup:
+    bi_destroy(r_);
+    bi_destroy(r_recip_);
+    bi_destroy(k_);
+    bi_destroy(mask_);
+    bi_destroy(mont_one_);
+
+    return 1;
+}
+
+/* converts value `value` to Montgomery form */
+bigint *bi_convert_to_montgomery(const bigint *value, size_t mont_bits, const bigint *modulus)
+{
+    bigint *r = bi_shl(value, mont_bits);
+    return r? bi_mod_assign(r, modulus): NULL;
+}
+
+/* converts value `value` from Montgomery form */
+bigint *bi_convert_from_montgomery(const bigint *value, const bigint *mont_r_recip, const bigint *modulus)
+{
+    bigint *r = bi_mul(value, mont_r_recip);
+    return r? bi_mod_assign(r, modulus): NULL;
+}
+
+/* multiplies two numbers in Montgomery form, result is in Montgomery form */
+bigint *bi_montgomery_mul(const bigint *a, const bigint *b, const bigint *modulus, size_t mont_bits, const bigint *mont_k, const bigint *mont_mask)
+{
+    bigint *s = NULL, *t = NULL;
+    bigint *c = bi_mul(a, b);
+    if (c == NULL)
+        goto cleanup;
+
+    /* reduce */
+    if ((s = bi_and(c, mont_mask)) == NULL ||
+        (s = bi_mul_assign(s, mont_k)) == NULL ||
+        (s = bi_and_assign(s, mont_mask)) == NULL || /* s = (c * mont_k) mod r */
+        (t = bi_mul(s, modulus)) == NULL ||
+        (t = bi_add_assign(t, c)) == NULL ||
+        (t = bi_shr_assign(t, mont_bits)) == NULL || /* t = (c + s * modulus) / r */
+        (bi_cmp_mag(t, modulus) >= 0 && (t = bi_fast_sub_assign(t, modulus)) == NULL))
+        goto cleanup;
+
+    bi_destroy(s);
+    bi_destroy(c);
+    return t;
+
+cleanup:
+    bi_destroy(s);
+    bi_destroy(c);
+    bi_destroy(t);
+
+    return NULL;
+}
+
+/* raises a (in Montgomery form) to b (in standard form), result is in Montgomery form */
+/* multiplies two numbers in Montgomery form, result is in Montgomery form */
+bigint *bi_montgomery_pow(const bigint *a, const bigint *b, const bigint *modulus, size_t mont_bits, const bigint *mont_k, const bigint *mont_mask, const bigint *mont_one)
+{
+    bigint *result = bi_copy(mont_one);
+    bigint *base = bi_copy(a);
+    if (result == NULL || base == NULL)
+        goto cleanup;
+
+    size_t bits = bi_bitcount(b);
+    for (size_t i = 0; i < bits; ++i)
+    {
+        if (bi_bit(b, i))
+        {
+            bigint *new_result = bi_montgomery_mul(result, base, modulus, mont_bits, mont_k, mont_mask);
+            if (new_result == NULL)
+                goto cleanup;
+
+            bi_destroy(result);
+            result = new_result;
+        }
+
+        bigint *new_base = bi_montgomery_mul(base, base, modulus, mont_bits, mont_k, mont_mask);
+        if (new_base == NULL)
+            goto cleanup;
+
+        bi_destroy(base);
+        base = new_base;
+    }
+
+    bi_destroy(base);
+    return result;
+
+cleanup:
+    bi_destroy(result);
+    bi_destroy(base);
+
+    return NULL;
+}
+
+/* deinitializes Montgomery multiplication variables */
+void bi_montgomery_deinit(bigint *r, bigint *r_recip, bigint *k, bigint *mask, bigint *mont_one)
+{
+    bi_destroy(r);
+    bi_destroy(r_recip);
+    bi_destroy(k);
+    bi_destroy(mask);
+    bi_destroy(mont_one);
 }
 
 static bigint *bi_divmod_immediate_internal(bigint *dst, const bigint *bi, bi_signed_leaf denom, bigint **q, bi_signed_leaf *r);
@@ -5215,11 +5418,91 @@ bigint *bi_gcd(const bigint *bi, const bigint *bi2)
     } while (!bi_is_zero(v));
 
     u = bi_shl_assign(u, pow);
-    if (u != NULL) return u;
+    if (u != NULL)
+    {
+        bi_destroy(v);
+        return u;
+    }
 
 cleanup:
     bi_destroy(u);
     bi_destroy(v);
+    return NULL;
+}
+
+/* finds modular inverse of a modulo m */
+/* returns NULL on out of memory, sets not_invertible to 1 if not invertible, 0 otherwise */
+/* algorithm taken from https://en.wikipedia.org/wiki/Extended_Euclidean_algorithm */
+bigint *bi_modinv(const bigint *a, const bigint *m, int *not_invertible)
+{
+    bigint *t = NULL, *newt = NULL;
+    bigint *r = NULL, *newr = NULL, *q = NULL;
+    bigint one = bi_one();
+
+    if ((t = bi_new()) == NULL ||
+        (newt = bi_copy(&one)) == NULL ||
+        (r = bi_copy(m)) == NULL ||
+        (newr = bi_copy(a)) == NULL)
+        goto cleanup;
+
+    if (not_invertible)
+        *not_invertible = 0;
+
+    while (!bi_is_zero(newr))
+    {
+        bi_destroy(q);
+        q = bi_div(r, newr);
+        if (q == NULL)
+            goto cleanup;
+
+        /* (t, newt) := (newt, t - quotient * newt) */
+        bigint *temp = bi_mul(q, newt);
+        if (temp == NULL) goto cleanup;
+
+        bigint *temp2 = bi_sub(t, temp); /* temp2 = t - q * newt */
+        bi_destroy(temp);
+        if (temp2 == NULL) goto cleanup;
+
+        bi_destroy(t);
+        t = newt;
+        newt = temp2;
+
+        /* (r, newr) := (newr, r - quotient * newr) */
+        temp = bi_mul(q, newr);
+        if (temp == NULL) goto cleanup;
+
+        temp2 = bi_sub(r, temp); /* temp2 = r - q * newr */
+        bi_destroy(temp);
+        if (temp2 == NULL) goto cleanup;
+
+        bi_destroy(r);
+        r = newr;
+        newr = temp2;
+    }
+
+    if (bi_cmp_immu(r, 1) > 0)
+    {
+        if (not_invertible)
+            *not_invertible = 1;
+        goto cleanup;
+    }
+
+    if (bi_is_negative(t) && (t = bi_add_assign(t, m)) == NULL)
+        goto cleanup;
+
+    bi_destroy(newt);
+    bi_destroy(r);
+    bi_destroy(newr);
+    bi_destroy(q);
+    return t;
+
+cleanup:
+    bi_destroy(t);
+    bi_destroy(newt);
+    bi_destroy(r);
+    bi_destroy(newr);
+    bi_destroy(q);
+
     return NULL;
 }
 
